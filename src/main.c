@@ -22,11 +22,16 @@ enum {
     LIVE_BEEP_ON_MS = 45,
     LIVE_BEEP_VOLUME_PERCENT = 70,
     STARTUP_BEEP_MS = 55,
+    SHUTDOWN_BEEP_MS = 70,
     STARTUP_INPUT_SETTLE_MS = 200,
 };
 
-static void shutdown_now(void) {
+static void shutdown_now(uint8_t beep) {
     board_dmm_beep_irq_arm(0);
+    if (beep) {
+        board_buzzer_set(1);
+        delay_ms(SHUTDOWN_BEEP_MS);
+    }
     board_buzzer_set(0);
     settings_flush();
     board_power_off();
@@ -150,7 +155,7 @@ int main(void) {
         uint32_t events = input_pressed_events();
         if (events && !input_settle_ms) {
             if (events & KEY_POWER) {
-                shutdown_now();
+                shutdown_now(1);
             }
             ui_handle_keys(events);
             if (events & KEY_REPEAT) {
@@ -165,7 +170,7 @@ int main(void) {
             ui_tick(20);
         }
         if (ui_auto_sleep_due()) {
-            shutdown_now();
+            shutdown_now(0);
         }
         fw_update_service();
         uint32_t active_ticks = load_counter_elapsed(active_start, load_counter_read());
