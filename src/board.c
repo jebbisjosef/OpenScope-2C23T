@@ -427,6 +427,30 @@ uint32_t input_read_keys(void) {
     return keys;
 }
 
+static uint32_t input_debounced_keys(void) {
+    enum {
+        DEBOUNCE_STABLE_POLLS = 2,
+    };
+    static uint32_t stable_keys;
+    static uint32_t candidate_keys;
+    static uint8_t stable_count;
+    uint32_t raw = input_read_keys();
+
+    if (raw == candidate_keys) {
+        if (stable_count < DEBOUNCE_STABLE_POLLS) {
+            ++stable_count;
+        }
+    } else {
+        candidate_keys = raw;
+        stable_count = 0;
+    }
+
+    if (stable_count >= DEBOUNCE_STABLE_POLLS) {
+        stable_keys = candidate_keys;
+    }
+    return stable_keys;
+}
+
 static uint32_t input_repeat_event(uint32_t now,
                                    uint32_t last,
                                    uint32_t key,
@@ -492,7 +516,7 @@ uint32_t input_pressed_events(void) {
         INPUT_POLL_MS = 20,
         LONG_PRESS_MS = 700,
     };
-    uint32_t now = input_read_keys();
+    uint32_t now = input_debounced_keys();
     uint32_t events = now & ~last_keys;
 
     events &= ~KEY_F3; // F3/SAVE have distinct short/long actions; emit short on release.
