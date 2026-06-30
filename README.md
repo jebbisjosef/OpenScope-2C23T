@@ -8,7 +8,9 @@ This firmware is still under active development. Use it at your own risk.
 
 ## Screenshots
 
-<!-- Add screenshots here -->
+| | | | |
+|---|---|---|---|
+| <img src="https://github.com/user-attachments/assets/17989306-4eee-4da2-8fed-e7fec0660791" width="320"/> | <img src="https://github.com/user-attachments/assets/371b7de3-4b3e-49d5-ad8f-349b1c0e128d" width="320"/> | <img src="https://github.com/user-attachments/assets/eeacebf9-699b-4f2b-977f-c0a2f7650e51" width="320"/> | <img src="https://github.com/user-attachments/assets/47e9052f-8960-4eac-9fb4-16ef131bd813" width="320"/> |
 
 ## What This Adds
 
