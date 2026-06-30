@@ -326,7 +326,7 @@ void scope_hw_configure_channels(uint8_t timebase,
     (void)ch1_vdiv;
     (void)ch2_vdiv;
 #endif
-    fpga_write_timing(0, scope_span_for_timebase(timebase));
+    fpga_write_scope_timing(scope_span_for_timebase(timebase));
     delay_ms(SCOPE_TIMING_SETTLE_MS);
 
     fpga_capture_latch();
@@ -378,7 +378,7 @@ void scope_hw_slow_start(uint8_t timebase) {
         return;
     }
 
-    fpga_write_timing(0, scope_span_for_timebase(timebase));
+    fpga_write_scope_timing(scope_span_for_timebase(timebase));
     delay_ms(SCOPE_TIMING_SETTLE_MS);
     fpga_capture_latch();
 

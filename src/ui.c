@@ -859,6 +859,18 @@ static void draw_battery(uint16_t x, uint16_t y, uint16_t bg) {
     }
 }
 
+static void draw_siggen_status(uint16_t x, uint16_t y, uint16_t bg) {
+    uint8_t active = (uint8_t)(gen_running || gen_output_applied);
+
+    lcd_rect(x, y, 26, 10, bg);
+    if (!active) {
+        return;
+    }
+
+    lcd_frame(x, y, 26, 10, C_GEN);
+    lcd_text((uint16_t)(x + 4u), (uint16_t)(y + 1u), "GEN", C_GEN, bg, 1);
+}
+
 static void draw_battery_status_header(void) {
     char pct[5];
     char volts[6];
@@ -866,6 +878,7 @@ static void draw_battery_status_header(void) {
     format_percent(pct);
     format_battery_voltage(volts);
 
+    draw_siggen_status(224, 7, C_TOP);
     lcd_rect(252, 4, 33, 21, C_TOP);
     lcd_text(254, 5, pct, battery_alert_color(C_TEXT), C_TOP, 1);
     lcd_text(254, 16, volts, battery_alert_color(C_MUTED), C_TOP, 1);
@@ -876,6 +889,7 @@ static void draw_battery_status_overlay(uint16_t bg) {
     char pct[5];
 
     format_percent(pct);
+    draw_siggen_status(224, 7, bg);
     lcd_rect(252, 5, 68, 15, bg);
     lcd_text(254, 9, pct, battery_alert_color(C_TEXT), bg, 1);
     draw_battery(280, 7, bg);

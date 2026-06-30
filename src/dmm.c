@@ -840,8 +840,10 @@ void dmm_init(void) {
 
     gpio_config_mask(GPIOB_BASE, 1u << 10, 0xBu); // USART3 TX, AF push-pull
     gpio_config_mask(GPIOB_BASE, 1u << 11, 0x4u); // USART3 RX, floating input
+#if !HW_TARGET_HW40
     gpio_config_mask(GPIOC_BASE, 1u << 6, 0x1u);  // DMM IC enable
     gpio_set(GPIOC_BASE, 1u << 6);
+#endif
 
     USART_CTRL2(USART3_BASE) = 0;
     USART_CTRL3(USART3_BASE) = 0;
@@ -860,7 +862,9 @@ void dmm_pause(void) {
     }
 
     USART_CTRL1(USART3_BASE) = 0;
+#if !HW_TARGET_HW40
     gpio_clear(GPIOC_BASE, 1u << 6);
+#endif
     dmm_powered = 0;
     dmm_valid = 0;
     dmm_synthetic_valid = 0;
@@ -873,7 +877,9 @@ static void dmm_resume_power(void) {
         return;
     }
 
+#if !HW_TARGET_HW40
     gpio_set(GPIOC_BASE, 1u << 6);
+#endif
     dmm_uart_apply_brr(dmm_current_brr());
     dmm_powered = 1;
 }
