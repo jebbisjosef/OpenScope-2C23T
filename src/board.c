@@ -517,6 +517,7 @@ uint32_t input_pressed_events(void) {
     static uint16_t move_hold_ms;
     static uint16_t f2_hold_ms;
     static uint16_t f3_hold_ms;
+    static uint16_t f4_hold_ms;
     static uint16_t auto_hold_ms;
     static uint16_t save_hold_ms;
     static uint16_t left_hold_ms;
@@ -530,6 +531,7 @@ uint32_t input_pressed_events(void) {
     static uint8_t move_long_sent;
     static uint8_t f2_long_sent;
     static uint8_t f3_long_sent;
+    static uint8_t f4_long_sent;
     static uint8_t auto_long_sent;
     static uint8_t save_long_sent;
     enum {
@@ -539,7 +541,8 @@ uint32_t input_pressed_events(void) {
     uint32_t now = input_debounced_keys();
     uint32_t events = now & ~last_keys;
 
-    events &= ~KEY_F3; // F3/SAVE have distinct short/long actions; emit short on release.
+    events &= ~KEY_F3; // F3/F4/SAVE have distinct short/long actions; emit short on release.
+    events &= ~KEY_F4;
     events &= ~KEY_SAVE;
 
     if (now & KEY_MOVE) {
@@ -591,6 +594,25 @@ uint32_t input_pressed_events(void) {
         }
         f3_hold_ms = 0;
         f3_long_sent = 0;
+    }
+
+    if (now & KEY_F4) {
+        if (!(last_keys & KEY_F4)) {
+            f4_hold_ms = 0;
+            f4_long_sent = 0;
+        } else if (!f4_long_sent) {
+            f4_hold_ms = f4_hold_ms < LONG_PRESS_MS ? (uint16_t)(f4_hold_ms + INPUT_POLL_MS) : f4_hold_ms;
+            if (f4_hold_ms >= LONG_PRESS_MS) {
+                events |= KEY_F4_LONG;
+                f4_long_sent = 1;
+            }
+        }
+    } else {
+        if ((last_keys & KEY_F4) && !f4_long_sent) {
+            events |= KEY_F4;
+        }
+        f4_hold_ms = 0;
+        f4_long_sent = 0;
     }
 
     if (now & KEY_AUTO) {

@@ -24,6 +24,7 @@ enum {
     KEY_REPEAT = 1u << 18,
     KEY_AUTO_LONG = 1u << 19,
     KEY_SAVE_LONG = 1u << 20,
+    KEY_F4_LONG = 1u << 21,
 };
 
 void delay_ms(uint32_t ms);

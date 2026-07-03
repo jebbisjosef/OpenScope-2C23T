@@ -43,6 +43,9 @@
 #define SCOPE_X_DIVS 12u
 #define SCOPE_Y_DIVS 8u
 #define SCOPE_TIMEBASE_DEFAULT 4u
+#define SCOPE_AUTO_TIMEBASE_MAX 17u
+#define SCOPE_AUTO_HALFPERIOD_MIN 5u
+#define SCOPE_AUTO_HALFPERIOD_MAX 60u
 #define SCOPE_MOVE_SEL_CHANNEL 0u
 #define SCOPE_MOVE_SEL_Y 1u
 #define SCOPE_MOVE_SEL_X 2u
@@ -250,6 +253,9 @@ static uint8_t scope_auto_zero_active;
 static uint8_t scope_auto_zero_mask;
 static uint8_t scope_auto_zero_stable_count;
 static uint8_t scope_auto_zero_steps_left;
+static uint8_t scope_auto_time_active;
+static uint8_t scope_auto_time_mask;
+static uint8_t scope_auto_time_steps_left;
 static uint8_t scope_auto_channel_mask;
 static uint8_t scope_auto_channel_steps_left;
 static uint8_t scope_cursor_x[2] = {80, 176};
@@ -578,6 +584,9 @@ static int8_t scope_clamp_channel_pos(uint8_t idx, int16_t pos);
 static uint32_t scope_estimate_freq_hz_window(uint8_t idx, uint16_t start, uint16_t end, uint8_t min_raw, uint8_t max_raw);
 static void scope_auto_zero_begin(uint8_t mask);
 static void scope_auto_zero_service(void);
+static void scope_auto_setup_request(uint8_t mask);
+static uint8_t scope_auto_time_service(void);
+static void scope_auto_channel_request(uint8_t mask);
 static void scope_auto_channel_service(void);
 static void scope_set_channel_pos_from_avg(uint8_t idx);
 static uint8_t scope_any_menu_open(void);
@@ -3489,6 +3498,10 @@ static uint8_t scope_poll_frame(void) {
         ui.running = 0;
     }
     scope_auto_zero_service();
+    if (scope_auto_time_service()) {
+        scope_trace_invalidate();
+        return 1;
+    }
     scope_auto_channel_service();
     scope_trace_invalidate();
     return 1;
@@ -5775,6 +5788,9 @@ static void ui_switch_mode(ui_mode_t mode) {
         ui.running = 1;
         ui.scope_ms = 0;
         scope_frame_valid = 0;
+        scope_auto_time_active = 0;
+        scope_auto_time_mask = 0;
+        scope_auto_time_steps_left = 0;
 #if !SCOPE_UI_SAFE_STUB
         scope_apply_settings();
 #else
@@ -5845,6 +5861,9 @@ void ui_init(void) {
     scope_auto_zero_mask = 0;
     scope_auto_zero_stable_count = 0;
     scope_auto_zero_steps_left = 0;
+    scope_auto_time_active = 0;
+    scope_auto_time_mask = 0;
+    scope_auto_time_steps_left = 0;
     scope_auto_channel_mask = 0;
     scope_auto_channel_steps_left = 0;
     ui.scope_display = SCOPE_DISPLAY_YT;
@@ -6471,6 +6490,11 @@ static int8_t scope_h_pos_from_value(void) {
 }
 
 static void scope_step_timebase(int8_t dir) {
+    scope_auto_time_active = 0;
+    scope_auto_time_mask = 0;
+    scope_auto_time_steps_left = 0;
+    scope_auto_channel_mask = 0;
+    scope_auto_channel_steps_left = 0;
     cycle_u8(&ui.scope_timebase, SCOPE_TIMEBASE_COUNT, dir);
     scope_h_pos = scope_h_pos_from_value();
     scope_cursor_time_sync_screen();
@@ -6872,6 +6896,173 @@ static uint8_t scope_channel_mid_raw(uint8_t idx) {
         idx = 0;
     }
     return (uint8_t)(((uint16_t)scope_min_raw[idx] + (uint16_t)scope_max_raw[idx]) / 2u);
+}
+
+static uint8_t scope_raw_crossed_level(uint8_t prev, uint8_t cur, uint8_t level, uint8_t falling) {
+    if (falling) {
+        return prev >= level && cur < level;
+    }
+    return prev <= level && cur > level;
+}
+
+static uint8_t scope_auto_find_edge(uint8_t idx,
+                                    uint16_t start,
+                                    uint16_t end,
+                                    uint8_t level,
+                                    uint8_t falling,
+                                    uint16_t *pos) {
+    if (!pos || idx >= 2u || start < 1u) {
+        return 0;
+    }
+    if (end > SCOPE_SAMPLE_COUNT) {
+        end = SCOPE_SAMPLE_COUNT;
+    }
+    for (uint16_t i = start; i < end; ++i) {
+        uint8_t prev = scope_samples[(uint16_t)((i - 1u) * 2u + idx)];
+        uint8_t cur = scope_samples[(uint16_t)(i * 2u + idx)];
+        if (scope_raw_crossed_level(prev, cur, level, falling)) {
+            *pos = i;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static uint8_t scope_auto_measure_half_period(uint8_t idx, uint16_t *half_period) {
+    uint16_t first = 0;
+    uint16_t opposite = 0;
+    uint16_t next = 0;
+    uint8_t pp;
+    uint8_t level;
+    uint8_t falling;
+
+    if (!half_period || idx >= 2u || !scope_ch_enabled[idx]) {
+        return 0;
+    }
+    pp = scope_channel_pp_raw(idx);
+    if (pp < 10u) {
+        return 0;
+    }
+    level = scope_channel_mid_raw(idx);
+    falling = ui.scope_trigger_edge ? 1u : 0u;
+    if (!scope_auto_find_edge(idx, 2u, 2046u, level, falling, &first)) {
+        return 0;
+    }
+    if (!scope_auto_find_edge(idx, (uint16_t)(first + 3u), 2046u, level, (uint8_t)!falling, &opposite)) {
+        return 0;
+    }
+    if (!scope_auto_find_edge(idx, (uint16_t)(first + 3u), 2046u, level, falling, &next) ||
+        next <= opposite) {
+        return 0;
+    }
+    *half_period = (uint16_t)(opposite - first);
+    return 1;
+}
+
+static uint8_t scope_auto_target_channel(void) {
+    uint8_t idx = scope_trigger_source_index();
+
+    if (idx < 2u && (scope_auto_time_mask & (uint8_t)(1u << idx)) && scope_ch_enabled[idx]) {
+        return idx;
+    }
+    if ((scope_auto_time_mask & 0x01u) && scope_ch_enabled[0]) {
+        return 0;
+    }
+    if ((scope_auto_time_mask & 0x02u) && scope_ch_enabled[1]) {
+        return 1;
+    }
+    return ui.active_ch == 2u ? 1u : 0u;
+}
+
+static uint8_t scope_auto_time_finish(uint8_t final_slow_step) {
+    uint8_t changed = 0;
+
+    scope_auto_time_active = 0;
+    if (final_slow_step && ui.scope_timebase < SCOPE_AUTO_TIMEBASE_MAX) {
+        ++ui.scope_timebase;
+        changed = 1;
+    }
+    if (changed) {
+        scope_auto_channel_mask = scope_auto_time_mask;
+        scope_auto_channel_steps_left = 6;
+        ui.running = 1;
+        scope_h_pos = 0;
+        scope_h_value_pos = 0;
+        scope_h_value_timebase = scope_safe_timebase();
+        scope_cursor_time_sync_screen();
+        scope_trigger_locked = 0;
+        scope_roll_trigger_reset();
+        scope_apply_settings();
+        scope_hw_arm();
+    } else {
+        scope_auto_channel_request(scope_auto_time_mask);
+    }
+    return changed;
+}
+
+static uint8_t scope_auto_time_service(void) {
+    uint16_t half_period = 0;
+    uint8_t idx;
+    uint8_t valid;
+
+    if (!scope_auto_time_active || !scope_frame_valid) {
+        return 0;
+    }
+    idx = scope_auto_target_channel();
+    valid = scope_auto_measure_half_period(idx, &half_period);
+    if (valid &&
+        half_period >= SCOPE_AUTO_HALFPERIOD_MIN &&
+        half_period <= SCOPE_AUTO_HALFPERIOD_MAX) {
+        return scope_auto_time_finish(1);
+    }
+    if ((!valid || half_period > SCOPE_AUTO_HALFPERIOD_MAX) &&
+        ui.scope_timebase < SCOPE_AUTO_TIMEBASE_MAX &&
+        scope_auto_time_steps_left) {
+        --scope_auto_time_steps_left;
+        ++ui.scope_timebase;
+        scope_h_pos = 0;
+        scope_h_value_pos = 0;
+        scope_h_value_timebase = scope_safe_timebase();
+        scope_cursor_time_sync_screen();
+        scope_trigger_locked = 0;
+        scope_roll_trigger_reset();
+        scope_apply_settings();
+        scope_hw_arm();
+        return 1;
+    }
+    return scope_auto_time_finish(0);
+}
+
+static void scope_auto_setup_request(uint8_t mask) {
+    mask &= 0x03u;
+    if (!mask) {
+        mask = (uint8_t)(ui.active_ch == 2u ? 0x02u : 0x01u);
+    }
+    scope_auto_zero_active = 0;
+    scope_auto_channel_mask = 0;
+    scope_auto_channel_steps_left = 0;
+    scope_auto_time_mask = mask;
+    scope_auto_time_steps_left = SCOPE_AUTO_TIMEBASE_MAX;
+    scope_auto_time_active = 1;
+    ui.running = 1;
+    ui.scope_display = SCOPE_DISPLAY_YT;
+    ui.scope_trigger_mode = SCOPE_TRIGGER_AUTO;
+    if ((ui.active_ch == 2u && (mask & 0x02u)) ||
+        !(mask & 0x01u)) {
+        ui.scope_trigger_source = 2u;
+    } else {
+        ui.scope_trigger_source = 1u;
+    }
+    ui.scope_trigger_level = 128;
+    ui.scope_timebase = 0;
+    scope_h_pos = 0;
+    scope_h_value_pos = 0;
+    scope_h_value_timebase = scope_safe_timebase();
+    scope_cursor_time_sync_screen();
+    scope_trigger_locked = 0;
+    scope_roll_trigger_reset();
+    scope_apply_settings();
+    scope_hw_arm();
 }
 
 static uint8_t scope_auto_channel_tune_vdiv(uint8_t idx) {
@@ -7363,6 +7554,16 @@ static void ui_open_mode_menu_item(uint8_t index) {
     }
 }
 
+static void ui_direct_mode(uint8_t index) {
+    scope_clear_menus();
+    ui.scope_move_menu_ms = 0;
+    ui.scope_move_sel = SCOPE_MOVE_SEL_CHANNEL;
+    dmm_pause_for_menu_overlay();
+    ui.overlay = UI_OVERLAY_NONE;
+    ui.chrome_visible = 0;
+    ui_open_mode_menu_item(index);
+}
+
 static void ui_handle_menu_keys(uint32_t events) {
     if (ui.overlay == UI_OVERLAY_MODE_MENU) {
         if (events & KEY_MENU) {
@@ -7453,6 +7654,27 @@ void ui_handle_keys(uint32_t events) {
         return;
     }
 
+    if (events & KEY_MOVE_LONG) {
+        ui_direct_mode(0);
+        ui_render();
+        return;
+    }
+    if (events & KEY_F2_LONG) {
+        ui_direct_mode(1);
+        ui_render();
+        return;
+    }
+    if (events & KEY_F3_LONG) {
+        ui_direct_mode(2);
+        ui_render();
+        return;
+    }
+    if (events & KEY_F4_LONG) {
+        ui_direct_mode(3);
+        ui_render();
+        return;
+    }
+
     if (ui.overlay != UI_OVERLAY_NONE) {
         ui_handle_menu_keys(events);
         return;
@@ -7493,15 +7715,6 @@ void ui_handle_keys(uint32_t events) {
     }
     if (events & KEY_LEFT) {
         ui_handle_horizontal_key(-1);
-        return;
-    }
-    if (events & KEY_MOVE_LONG) {
-        return;
-    }
-    if (events & KEY_F2_LONG) {
-        return;
-    }
-    if (events & KEY_F3_LONG) {
         return;
     }
     if (events & KEY_MOVE) {
@@ -7589,7 +7802,7 @@ void ui_handle_keys(uint32_t events) {
                 if (!mask) {
                     mask = (uint8_t)(ui.active_ch == 2u ? 0x02u : 0x01u);
                 }
-                scope_auto_channel_request(mask);
+                scope_auto_setup_request(mask);
             }
         } else {
             gen_select_or_advance_param(GEN_PARAM_DUTY);
