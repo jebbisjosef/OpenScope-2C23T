@@ -16,6 +16,7 @@ enum {
     USART_CTRL1_TE = 1u << 3,
     USART_CTRL1_RXNEIE = 1u << 5,
     USART_CTRL1_UE = 1u << 13,
+    USART_CTRL3_HW4_DMM_STOCK = (1u << 2) | (1u << 3) | (1u << 4),
 
     DMM_FRAME_LEN = 9,
     DMM_CMD_LEN = 10,
@@ -143,6 +144,14 @@ static void dmm_uart_apply_brr(uint16_t brr) {
     (void)USART_STS(USART3_BASE);
     (void)USART_DT(USART3_BASE);
     USART_CTRL1(USART3_BASE) = USART_CTRL1_UE | USART_CTRL1_RXNEIE | USART_CTRL1_TE | USART_CTRL1_RE;
+}
+
+static void dmm_uart_apply_ctrl3(void) {
+#if HW_TARGET_HW40
+    USART_CTRL3(USART3_BASE) = USART_CTRL3_HW4_DMM_STOCK;
+#else
+    USART_CTRL3(USART3_BASE) = 0;
+#endif
 }
 
 static void dmm_uart_drain_rx(void) {
@@ -848,7 +857,7 @@ void dmm_init(void) {
 #endif
 
     USART_CTRL2(USART3_BASE) = 0;
-    USART_CTRL3(USART3_BASE) = 0;
+    dmm_uart_apply_ctrl3();
     dmm_detected_brr = dmm_compute_brr();
     dmm_uart_apply_brr(dmm_current_brr());
     REG32(NVIC_ISER1) = 1u << 7; // IRQ39, USART3 global
@@ -883,6 +892,7 @@ static void dmm_resume_power(void) {
     gpio_set(GPIOC_BASE, 1u << 6);
     delay_ms(DMM_POWER_SETTLE_MS);
 #endif
+    dmm_uart_apply_ctrl3();
     dmm_uart_apply_brr(dmm_current_brr());
     dmm_powered = 1;
 }
@@ -912,6 +922,7 @@ void dmm_reenter(uint8_t mode_index) {
     delay_ms(DMM_POWER_SETTLE_MS);
 #endif
 
+    dmm_uart_apply_ctrl3();
     dmm_uart_apply_brr(dmm_current_brr());
     dmm_powered = 1;
     dmm_current_mode = mode_index;
