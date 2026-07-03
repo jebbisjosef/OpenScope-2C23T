@@ -5889,7 +5889,12 @@ static void ui_switch_mode(ui_mode_t mode) {
         dmm_hold_active = 0;
         dmm_rel_active = 0;
         dmm_stats_reset();
-        dmm_set_mode(DMM_MODE_AUTO);
+        if (old_mode == UI_MODE_DMM) {
+            dmm_set_mode(DMM_MODE_AUTO);
+        } else {
+            siggen_shutdown();
+            dmm_reenter(DMM_MODE_AUTO);
+        }
         ui_settings.dmm_mode = DMM_MODE_AUTO;
     }
     ui_settings.last_screen = (uint8_t)mode;

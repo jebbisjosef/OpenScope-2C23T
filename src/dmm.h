@@ -4,6 +4,7 @@
 
 void dmm_init(void);
 void dmm_pause(void);
+void dmm_reenter(uint8_t mode_index);
 void dmm_set_mode(uint8_t mode_index);
 uint8_t dmm_poll(void);
 void dmm_tick(uint32_t elapsed_ms);
