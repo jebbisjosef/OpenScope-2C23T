@@ -33,7 +33,7 @@
 #define GEN_FREQ_UNIT_COUNT 3u
 #define GEN_DUTY_EDIT_DIGITS 3u
 #define GEN_AMP_EDIT_DIGITS 2u
-#define FIRMWARE_VERSION_TEXT "v2026.06.3"
+#define FIRMWARE_VERSION_TEXT "v2026.06.4"
 #ifndef SCOPE_UI_SAFE_STUB
 #define SCOPE_UI_SAFE_STUB 1
 #endif
@@ -302,7 +302,33 @@ static void ui_settings_copy(settings_state_t *dst, const settings_state_t *src)
     dst->startup_screen = src->startup_screen;
     dst->last_screen = src->last_screen;
     dst->sleep_enabled = src->sleep_enabled;
+    dst->scope_timebase = src->scope_timebase;
+    dst->scope_display = src->scope_display;
+    dst->scope_cursor_mode = src->scope_cursor_mode;
+    dst->scope_trigger_source = src->scope_trigger_source;
+    dst->scope_trigger_mode = src->scope_trigger_mode;
+    dst->scope_trigger_edge = src->scope_trigger_edge;
+    dst->scope_trigger_level = src->scope_trigger_level;
+    dst->scope_afterglow = src->scope_afterglow;
+    dst->scope_active_ch = src->scope_active_ch;
+    dst->scope_measure_param = src->scope_measure_param;
+    dst->scope_measure_visible = src->scope_measure_visible;
+    dst->scope_h_value_pos = src->scope_h_value_pos;
+    dst->scope_h_value_timebase = src->scope_h_value_timebase;
+    dst->siggen_wave = src->siggen_wave;
+    dst->siggen_param = src->siggen_param;
+    dst->siggen_duty_percent = src->siggen_duty_percent;
+    dst->siggen_amp_tenths_v = src->siggen_amp_tenths_v;
+    dst->siggen_freq_unit = src->siggen_freq_unit;
+    dst->siggen_running = src->siggen_running;
+    dst->siggen_freq_hz = src->siggen_freq_hz;
     for (uint8_t ch = 0; ch < SETTINGS_SCOPE_CHANNEL_COUNT; ++ch) {
+        dst->scope_ch_enabled[ch] = src->scope_ch_enabled[ch];
+        dst->scope_probe_x10[ch] = src->scope_probe_x10[ch];
+        dst->scope_vdiv[ch] = src->scope_vdiv[ch];
+        dst->scope_coupling_dc[ch] = src->scope_coupling_dc[ch];
+        dst->scope_ch_pos[ch] = src->scope_ch_pos[ch];
+        dst->scope_measure_mask[ch] = src->scope_measure_mask[ch];
         for (uint8_t range = 0; range < SETTINGS_SCOPE_RANGE_COUNT; ++range) {
             dst->scope_bias[ch][range] = src->scope_bias[ch][range];
             dst->scope_bias_rate[ch][range] = src->scope_bias_rate[ch][range];
@@ -589,6 +615,7 @@ static uint8_t scope_auto_time_service(void);
 static void scope_auto_channel_request(uint8_t mask);
 static void scope_auto_channel_service(void);
 static void scope_set_channel_pos_from_avg(uint8_t idx);
+static void ui_apply_saved_runtime_settings(void);
 static uint8_t scope_any_menu_open(void);
 static uint8_t scope_softkey_menu_open(void);
 static void scope_clear_menus(void);
@@ -1349,22 +1376,25 @@ static void draw_scope_scale_status(uint16_t y, uint16_t bg) {
     char ch1[10];
     char ch2[10];
 
-    ch1[0] = 'C';
-    ch1[1] = 'H';
-    ch1[2] = '1';
-    ch1[3] = ' ';
-    scope_text_copy(&ch1[4], scope_vdiv_chip_label_for_channel(0), 6);
-    ch2[0] = 'C';
-    ch2[1] = 'H';
-    ch2[2] = '2';
-    ch2[3] = ' ';
-    scope_text_copy(&ch2[4], scope_vdiv_chip_label_for_channel(1), 6);
-
-    lcd_text(0, y, ch1, C_CH1, bg, 2);
+    if (scope_ch_enabled[0]) {
+        ch1[0] = 'C';
+        ch1[1] = 'H';
+        ch1[2] = '1';
+        ch1[3] = ' ';
+        scope_text_copy(&ch1[4], scope_vdiv_chip_label_for_channel(0), 6);
+        lcd_text(0, y, ch1, C_CH1, bg, 2);
+    }
     lcd_text_center(96, y, 72, scope_timebase_label(), C_TEXT, bg, 2);
     lcd_text_center(168, y, 56, ui.running ? (scope_slow_roll_active() ? "ROLL" : "RUN") : "HOLD",
                     ui.running ? C_DMM : C_WARN, bg, 2);
-    lcd_text(224, y, ch2, C_CH2, bg, 2);
+    if (scope_ch_enabled[1]) {
+        ch2[0] = 'C';
+        ch2[1] = 'H';
+        ch2[2] = '2';
+        ch2[3] = ' ';
+        scope_text_copy(&ch2[4], scope_vdiv_chip_label_for_channel(1), 6);
+        lcd_text(224, y, ch2, C_CH2, bg, 2);
+    }
 }
 
 static const char *scope_channel_enable_label(void) {
@@ -2976,12 +3006,14 @@ static int16_t scope_sim_y(uint16_t x, uint8_t ch2, int16_t center, int16_t amp)
 static void scope_trace_invalidate(void) {
     if (ui.scope_afterglow) {
         for (uint8_t ch = 0; ch < 2u; ++ch) {
-            if (scope_trace_cache[ch].valid) {
+            if (scope_ch_enabled[ch] && scope_trace_cache[ch].valid) {
                 scope_after_count[ch] = scope_trace_cache[ch].count;
                 for (uint8_t i = 0; i < scope_trace_cache[ch].count; ++i) {
                     scope_after_y[ch][i] = scope_trace_cache[ch].y[i];
                 }
                 scope_after_valid[ch] = 1;
+            } else if (!scope_ch_enabled[ch]) {
+                scope_after_valid[ch] = 0;
             }
         }
     } else {
@@ -3100,6 +3132,19 @@ static void scope_compute_stats(void) {
         sq1 += (uint32_t)(d1 * d1);
     }
 
+    if (!scope_ch_enabled[0]) {
+        min0 = 128;
+        max0 = 128;
+        sum0 = (uint32_t)count * 128u;
+        sq0 = 0;
+    }
+    if (!scope_ch_enabled[1]) {
+        min1 = 128;
+        max1 = 128;
+        sum1 = (uint32_t)count * 128u;
+        sq1 = 0;
+    }
+
     scope_min_raw[0] = min0;
     scope_min_raw[1] = min1;
     scope_max_raw[0] = max0;
@@ -3114,8 +3159,8 @@ static void scope_compute_stats(void) {
                                 min1,
                                 max1,
                                 (uint16_t)scope_isqrt_u32((sq1 + count / 2u) / count),
-                                scope_estimate_freq_hz_window(0, start, end, min0, max0),
-                                scope_estimate_freq_hz_window(1, start, end, min1, max1));
+                                scope_ch_enabled[0] ? scope_estimate_freq_hz_window(0, start, end, min0, max0) : 0,
+                                scope_ch_enabled[1] ? scope_estimate_freq_hz_window(1, start, end, min1, max1) : 0);
 }
 
 static uint16_t scope_slow_roll_interval_ms(void) {
@@ -3205,6 +3250,19 @@ static void scope_slow_roll_update_stats(void) {
         sum1 += s1;
         sq0 += (uint32_t)(d0 * d0);
         sq1 += (uint32_t)(d1 * d1);
+    }
+
+    if (!scope_ch_enabled[0]) {
+        min0 = 128;
+        max0 = 128;
+        sum0 = (uint32_t)count * 128u;
+        sq0 = 0;
+    }
+    if (!scope_ch_enabled[1]) {
+        min1 = 128;
+        max1 = 128;
+        sum1 = (uint32_t)count * 128u;
+        sq1 = 0;
     }
 
     scope_min_raw[0] = min0;
@@ -4301,6 +4359,15 @@ static uint16_t scope_channel_header_color(uint8_t ch) {
     return ui.active_ch == ch ? C_TEXT : scope_channel_color(ch);
 }
 
+static void draw_scope_channel_headers(uint16_t ch1_x, uint16_t ch2_x, uint16_t y, uint16_t bg) {
+    if (scope_ch_enabled[0]) {
+        lcd_text(ch1_x, y, "CH1", scope_channel_header_color(1), bg, 1);
+    }
+    if (scope_ch_enabled[1]) {
+        lcd_text(ch2_x, y, "CH2", scope_channel_header_color(2), bg, 1);
+    }
+}
+
 static int16_t scope_channel_center(int16_t base, uint8_t ch2) {
     int8_t pos = scope_ch_pos[ch2 ? 1u : 0u];
 
@@ -4831,11 +4898,19 @@ static void draw_scope_chrome_live(void) {
         draw_scope_xy(gx, gy, gw, gh, C_SCOPE);
     } else {
         if (ui.scope_afterglow) {
-            draw_scope_stub_trace(gx, gy, gw, gh, ch1_center, scope_stub_amp(0), scope_dim_color(C_CH1), (uint8_t)(ui.scope_phase - 18u));
-            draw_scope_stub_trace(gx, gy, gw, gh, ch2_center, scope_stub_amp(1), scope_dim_color(C_CH2), (uint8_t)(ui.scope_phase + 46u));
+            if (scope_ch_enabled[0]) {
+                draw_scope_stub_trace(gx, gy, gw, gh, ch1_center, scope_stub_amp(0), scope_dim_color(C_CH1), (uint8_t)(ui.scope_phase - 18u));
+            }
+            if (scope_ch_enabled[1]) {
+                draw_scope_stub_trace(gx, gy, gw, gh, ch2_center, scope_stub_amp(1), scope_dim_color(C_CH2), (uint8_t)(ui.scope_phase + 46u));
+            }
         }
-        draw_scope_stub_trace(gx, gy, gw, gh, ch1_center, scope_stub_amp(0), C_CH1, (uint8_t)ui.scope_phase);
-        draw_scope_stub_trace(gx, gy, gw, gh, ch2_center, scope_stub_amp(1), C_CH2, (uint8_t)(ui.scope_phase + 64u));
+        if (scope_ch_enabled[0]) {
+            draw_scope_stub_trace(gx, gy, gw, gh, ch1_center, scope_stub_amp(0), C_CH1, (uint8_t)ui.scope_phase);
+        }
+        if (scope_ch_enabled[1]) {
+            draw_scope_stub_trace(gx, gy, gw, gh, ch2_center, scope_stub_amp(1), C_CH2, (uint8_t)(ui.scope_phase + 64u));
+        }
         draw_scope_channel_markers(gx, gy, gh, ch1_center, ch2_center, grid_bg);
     }
     draw_scope_trigger_line(gx, gy, gw, gh, grid_bg);
@@ -4843,8 +4918,7 @@ static void draw_scope_chrome_live(void) {
     draw_scope_cursor_readout(gx, gy, gw, gh, grid_bg);
     draw_scope_hpos_indicator(gx, gy, gw, gh, grid_bg);
     draw_scope_measurements(gx, gy, gw, gh, grid_bg);
-    lcd_text(18, 61, "CH1", scope_channel_header_color(1), grid_bg, 1);
-    lcd_text(262, 61, "CH2", scope_channel_header_color(2), grid_bg, 1);
+    draw_scope_channel_headers(18, 262, 61, grid_bg);
     draw_scope_scale_status(182, C_BG);
     return;
 #endif
@@ -4891,8 +4965,7 @@ static void draw_scope_chrome_live(void) {
         lcd_text_center(gx, 103, gw, scope_hw_ready() ? "WAIT" : "FPGA", C_MUTED, grid_bg, 2);
     }
 
-    lcd_text(18, 61, "CH1", scope_channel_header_color(1), grid_bg, 1);
-    lcd_text(262, 61, "CH2", scope_channel_header_color(2), grid_bg, 1);
+    draw_scope_channel_headers(18, 262, 61, grid_bg);
 
     lcd_rect(0, 180, LCD_WIDTH, 19, C_BG);
     draw_scope_scale_status(182, C_BG);
@@ -4923,11 +4996,19 @@ static void draw_scope_immersive(void) {
         draw_scope_xy(gx, gy, gw, gh, C_SCOPE);
     } else {
         if (ui.scope_afterglow) {
-            draw_scope_stub_trace(gx, gy, gw, gh, ch1_center, (int16_t)(scope_stub_amp(0) + 16), scope_dim_color(C_CH1), (uint8_t)(ui.scope_phase - 18u));
-            draw_scope_stub_trace(gx, gy, gw, gh, ch2_center, (int16_t)(scope_stub_amp(1) + 12), scope_dim_color(C_CH2), (uint8_t)(ui.scope_phase + 46u));
+            if (scope_ch_enabled[0]) {
+                draw_scope_stub_trace(gx, gy, gw, gh, ch1_center, (int16_t)(scope_stub_amp(0) + 16), scope_dim_color(C_CH1), (uint8_t)(ui.scope_phase - 18u));
+            }
+            if (scope_ch_enabled[1]) {
+                draw_scope_stub_trace(gx, gy, gw, gh, ch2_center, (int16_t)(scope_stub_amp(1) + 12), scope_dim_color(C_CH2), (uint8_t)(ui.scope_phase + 46u));
+            }
         }
-        draw_scope_stub_trace(gx, gy, gw, gh, ch1_center, (int16_t)(scope_stub_amp(0) + 16), C_CH1, (uint8_t)ui.scope_phase);
-        draw_scope_stub_trace(gx, gy, gw, gh, ch2_center, (int16_t)(scope_stub_amp(1) + 12), C_CH2, (uint8_t)(ui.scope_phase + 64u));
+        if (scope_ch_enabled[0]) {
+            draw_scope_stub_trace(gx, gy, gw, gh, ch1_center, (int16_t)(scope_stub_amp(0) + 16), C_CH1, (uint8_t)ui.scope_phase);
+        }
+        if (scope_ch_enabled[1]) {
+            draw_scope_stub_trace(gx, gy, gw, gh, ch2_center, (int16_t)(scope_stub_amp(1) + 12), C_CH2, (uint8_t)(ui.scope_phase + 64u));
+        }
         draw_scope_channel_markers(gx, gy, gh, ch1_center, ch2_center, grid_bg);
     }
     draw_scope_trigger_line(gx, gy, gw, gh, grid_bg);
@@ -4935,8 +5016,7 @@ static void draw_scope_immersive(void) {
     draw_scope_cursor_readout(gx, gy, gw, gh, grid_bg);
     draw_scope_hpos_indicator(gx, gy, gw, gh, grid_bg);
     draw_scope_measurements(gx, gy, gw, gh, grid_bg);
-    lcd_text(16, 34, "CH1", scope_channel_header_color(1), grid_bg, 1);
-    lcd_text(276, 34, "CH2", scope_channel_header_color(2), grid_bg, 1);
+    draw_scope_channel_headers(16, 276, 34, grid_bg);
     draw_scope_scale_status(220, grid_bg);
     return;
 #endif
@@ -5780,7 +5860,6 @@ static void ui_switch_mode(ui_mode_t mode) {
     ui.scope_measure_menu_sel = SCOPE_MEASURE_MENU_VALUE;
     ui.scope_cursor_menu_sel = SCOPE_CURSOR_MENU_MODE;
     if (mode == UI_MODE_SCOPE) {
-        ui.active_ch = 1;
         ui.scope_param = SCOPE_PARAM_POSITION;
         scope_auto_channel_mask = 0;
         scope_auto_channel_steps_left = 0;
@@ -5895,6 +5974,7 @@ void ui_init(void) {
         scope_cursor_store_time_from_raw(i);
         scope_cursor_store_level_from_raw(i);
     }
+    ui_apply_saved_runtime_settings();
     ui.dmm_mode = dmm_sanitize_mode(ui_settings.dmm_mode);
     if (start_mode == UI_MODE_DMM) {
         ui.dmm_mode = DMM_MODE_AUTO;
@@ -6108,6 +6188,44 @@ static void dmm_apply_selected_mode(void) {
     if (dmm_mode_uses_real_reading()) {
         dmm_set_mode(ui.dmm_mode);
     }
+}
+
+void ui_note_runtime_settings(void) {
+    scope_sanitize_state();
+    gen_prepare_state();
+
+    ui_settings.dmm_mode = ui.dmm_mode;
+    ui_settings.scope_timebase = scope_safe_timebase();
+    ui_settings.scope_display = scope_safe_display();
+    ui_settings.scope_cursor_mode = scope_safe_cursor();
+    ui_settings.scope_trigger_source = ui.scope_trigger_source;
+    ui_settings.scope_trigger_mode = ui.scope_trigger_mode;
+    ui_settings.scope_trigger_edge = ui.scope_trigger_edge ? 1u : 0u;
+    ui_settings.scope_trigger_level = ui.scope_trigger_level;
+    ui_settings.scope_afterglow = ui.scope_afterglow ? 1u : 0u;
+    ui_settings.scope_active_ch = ui.active_ch;
+    ui_settings.scope_measure_param = scope_measure_param;
+    ui_settings.scope_measure_visible = scope_measure_visible ? 1u : 0u;
+    ui_settings.scope_h_value_pos = scope_h_value_pos;
+    ui_settings.scope_h_value_timebase = scope_h_value_timebase;
+
+    for (uint8_t ch = 0; ch < 2u; ++ch) {
+        ui_settings.scope_ch_enabled[ch] = scope_ch_enabled[ch] ? 1u : 0u;
+        ui_settings.scope_probe_x10[ch] = scope_probe_x10[ch] ? 1u : 0u;
+        ui_settings.scope_vdiv[ch] = scope_vdiv_ch[ch];
+        ui_settings.scope_coupling_dc[ch] = scope_coupling_dc[ch] ? 1u : 0u;
+        ui_settings.scope_ch_pos[ch] = scope_ch_pos[ch];
+        ui_settings.scope_measure_mask[ch] = (uint8_t)(scope_measure_mask[ch] & scope_measure_valid_mask());
+    }
+
+    ui_settings.siggen_wave = ui.gen_wave;
+    ui_settings.siggen_param = ui.gen_param;
+    ui_settings.siggen_duty_percent = ui.gen_duty_percent;
+    ui_settings.siggen_amp_tenths_v = ui.gen_amp_tenths_v;
+    ui_settings.siggen_freq_unit = gen_freq_unit;
+    ui_settings.siggen_running = 0;
+    ui_settings.siggen_freq_hz = ui.gen_freq_hz;
+    settings_note(&ui_settings);
 }
 
 static void gen_schedule_deferred_apply(void) {
@@ -6487,6 +6605,45 @@ static int8_t scope_h_pos_from_value(void) {
     return scope_rescale_h_pos_for_timebase(scope_h_value_pos,
                                             scope_timebase_unit_ns[value_timebase],
                                             scope_timebase_unit_ns[scope_safe_timebase()]);
+}
+
+static void ui_apply_saved_runtime_settings(void) {
+    ui.scope_timebase = ui_settings.scope_timebase;
+    ui.scope_display = ui_settings.scope_display;
+    ui.scope_cursor_mode = ui_settings.scope_cursor_mode;
+    ui.scope_trigger_source = ui_settings.scope_trigger_source;
+    ui.scope_trigger_mode = ui_settings.scope_trigger_mode;
+    ui.scope_trigger_edge = ui_settings.scope_trigger_edge;
+    ui.scope_trigger_level = ui_settings.scope_trigger_level;
+    ui.scope_afterglow = ui_settings.scope_afterglow;
+    ui.active_ch = ui_settings.scope_active_ch;
+    scope_measure_param = ui_settings.scope_measure_param;
+    scope_measure_visible = ui_settings.scope_measure_visible;
+    scope_h_value_pos = ui_settings.scope_h_value_pos;
+    scope_h_value_timebase = ui_settings.scope_h_value_timebase;
+
+    for (uint8_t ch = 0; ch < 2u; ++ch) {
+        scope_ch_enabled[ch] = ui_settings.scope_ch_enabled[ch];
+        scope_probe_x10[ch] = ui_settings.scope_probe_x10[ch];
+        scope_vdiv_ch[ch] = ui_settings.scope_vdiv[ch];
+        scope_coupling_dc[ch] = ui_settings.scope_coupling_dc[ch];
+        scope_ch_pos[ch] = ui_settings.scope_ch_pos[ch];
+        scope_measure_mask[ch] = ui_settings.scope_measure_mask[ch];
+    }
+
+    ui.gen_wave = ui_settings.siggen_wave;
+    ui.gen_param = ui_settings.siggen_param;
+    ui.gen_duty_percent = ui_settings.siggen_duty_percent;
+    ui.gen_amp_tenths_v = ui_settings.siggen_amp_tenths_v;
+    ui.gen_freq_hz = ui_settings.siggen_freq_hz;
+    gen_freq_unit = ui_settings.siggen_freq_unit;
+    gen_running = 0;
+    gen_prepare_state();
+
+    scope_sanitize_state();
+    scope_h_pos = scope_h_pos_from_value();
+    scope_cursor_time_sync_screen();
+    scope_cursor_level_sync_screen();
 }
 
 static void scope_step_timebase(int8_t dir) {

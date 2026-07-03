@@ -12,6 +12,21 @@ enum {
     SETTINGS_SLEEP_COUNT = 4,
     SETTINGS_SCOPE_CHANNEL_COUNT = 2,
     SETTINGS_SCOPE_RANGE_COUNT = 9,
+    SETTINGS_SCOPE_TIMEBASE_DEFAULT = 4,
+    SETTINGS_SCOPE_TIMEBASE_COUNT = 26,
+    SETTINGS_SCOPE_DISPLAY_COUNT = 3,
+    SETTINGS_SCOPE_CURSOR_COUNT = 3,
+    SETTINGS_SCOPE_TRIGGER_COUNT = 3,
+    SETTINGS_SCOPE_MEASURE_COUNT = 6,
+    SETTINGS_SIGGEN_WAVE_COUNT = 15,
+    SETTINGS_SIGGEN_PARAM_COUNT = 4,
+    SETTINGS_SIGGEN_FREQ_UNIT_COUNT = 3,
+    SETTINGS_SIGGEN_DEFAULT_WAVE = 0,
+    SETTINGS_SIGGEN_DEFAULT_PARAM = 1,
+    SETTINGS_SIGGEN_DEFAULT_DUTY = 50,
+    SETTINGS_SIGGEN_DEFAULT_AMP_TENTHS = 33,
+    SETTINGS_SIGGEN_DEFAULT_FREQ_HZ = 1000,
+    SETTINGS_SIGGEN_MAX_FREQ_HZ = 2000000,
 };
 
 typedef struct {
@@ -21,6 +36,32 @@ typedef struct {
     uint8_t startup_screen;
     uint8_t last_screen;
     uint8_t sleep_enabled;
+    uint8_t scope_timebase;
+    uint8_t scope_display;
+    uint8_t scope_cursor_mode;
+    uint8_t scope_trigger_source;
+    uint8_t scope_trigger_mode;
+    uint8_t scope_trigger_edge;
+    uint8_t scope_trigger_level;
+    uint8_t scope_afterglow;
+    uint8_t scope_active_ch;
+    uint8_t scope_measure_param;
+    uint8_t scope_measure_visible;
+    uint8_t scope_ch_enabled[SETTINGS_SCOPE_CHANNEL_COUNT];
+    uint8_t scope_probe_x10[SETTINGS_SCOPE_CHANNEL_COUNT];
+    uint8_t scope_vdiv[SETTINGS_SCOPE_CHANNEL_COUNT];
+    uint8_t scope_coupling_dc[SETTINGS_SCOPE_CHANNEL_COUNT];
+    int8_t scope_ch_pos[SETTINGS_SCOPE_CHANNEL_COUNT];
+    uint8_t scope_measure_mask[SETTINGS_SCOPE_CHANNEL_COUNT];
+    int8_t scope_h_value_pos;
+    uint8_t scope_h_value_timebase;
+    uint8_t siggen_wave;
+    uint8_t siggen_param;
+    uint8_t siggen_duty_percent;
+    uint8_t siggen_amp_tenths_v;
+    uint8_t siggen_freq_unit;
+    uint8_t siggen_running;
+    uint32_t siggen_freq_hz;
     uint16_t scope_bias[SETTINGS_SCOPE_CHANNEL_COUNT][SETTINGS_SCOPE_RANGE_COUNT];
     uint16_t scope_bias_rate[SETTINGS_SCOPE_CHANNEL_COUNT][SETTINGS_SCOPE_RANGE_COUNT];
 } settings_state_t;

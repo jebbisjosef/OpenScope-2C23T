@@ -14,10 +14,20 @@ enum {
     SETTINGS_SCOPE_CAL_MAGIC_MASK = 0xFF000000u,
     SETTINGS_LEGACY_MAGIC = 0xE1A60000u,
     SETTINGS_LEGACY_MAGIC_MASK = 0xFFFF0000u,
+    SETTINGS_STATE_SCOPE_CORE = 0xC9u,
+    SETTINGS_STATE_SCOPE_TRIGGER = 0xCAu,
+    SETTINGS_STATE_SCOPE_CH0 = 0xCBu,
+    SETTINGS_STATE_SCOPE_CH1 = 0xCCu,
+    SETTINGS_STATE_SCOPE_MEASURE = 0xCDu,
+    SETTINGS_STATE_SIGGEN_CORE = 0xCEu,
+    SETTINGS_STATE_SIGGEN_FREQ_LO = 0xCFu,
+    SETTINGS_STATE_SIGGEN_FREQ_HI = 0xD0u,
+    SETTINGS_STATE_SCOPE_POS = 0xD1u,
     SETTINGS_SCOPE_BIAS_DEFAULT = 1861u,
     SETTINGS_SCOPE_BIAS_RATE_DEFAULT = 505u,
     SETTINGS_SCOPE_CAL_WORDS = SETTINGS_SCOPE_CHANNEL_COUNT * SETTINGS_SCOPE_RANGE_COUNT * 2,
-    SETTINGS_WRITE_BYTES = 4u * (1u + SETTINGS_SCOPE_CAL_WORDS),
+    SETTINGS_STATE_WORDS = 9u,
+    SETTINGS_WRITE_BYTES = 4u * (1u + SETTINGS_SCOPE_CAL_WORDS + SETTINGS_STATE_WORDS),
     FLASH_BANK2_BASE = 0x08080000u,
     FLASH_STS_BSY = 1u << 0,
     FLASH_STS_PGERR = 1u << 2,
@@ -33,6 +43,8 @@ static uint8_t settings_loaded;
 static settings_state_t settings_cached;
 static settings_state_t settings_pending;
 static uint8_t settings_dirty;
+
+static void flash_program_word(uint32_t addr, uint32_t value);
 
 static void settings_scope_cal_defaults(settings_state_t *settings) {
     for (uint8_t ch = 0; ch < SETTINGS_SCOPE_CHANNEL_COUNT; ++ch) {
@@ -50,6 +62,34 @@ static void settings_defaults(settings_state_t *settings) {
     settings->startup_screen = SETTINGS_START_DMM;
     settings->last_screen = 0;
     settings->sleep_enabled = 0;
+    settings->scope_timebase = SETTINGS_SCOPE_TIMEBASE_DEFAULT;
+    settings->scope_display = 0;
+    settings->scope_cursor_mode = 0;
+    settings->scope_trigger_source = 1;
+    settings->scope_trigger_mode = 0;
+    settings->scope_trigger_edge = 0;
+    settings->scope_trigger_level = 128;
+    settings->scope_afterglow = 0;
+    settings->scope_active_ch = 1;
+    settings->scope_measure_param = 0;
+    settings->scope_measure_visible = 1;
+    settings->scope_h_value_pos = 0;
+    settings->scope_h_value_timebase = SETTINGS_SCOPE_TIMEBASE_DEFAULT;
+    settings->siggen_wave = SETTINGS_SIGGEN_DEFAULT_WAVE;
+    settings->siggen_param = SETTINGS_SIGGEN_DEFAULT_PARAM;
+    settings->siggen_duty_percent = SETTINGS_SIGGEN_DEFAULT_DUTY;
+    settings->siggen_amp_tenths_v = SETTINGS_SIGGEN_DEFAULT_AMP_TENTHS;
+    settings->siggen_freq_unit = 0;
+    settings->siggen_running = 0;
+    settings->siggen_freq_hz = SETTINGS_SIGGEN_DEFAULT_FREQ_HZ;
+    for (uint8_t ch = 0; ch < SETTINGS_SCOPE_CHANNEL_COUNT; ++ch) {
+        settings->scope_ch_enabled[ch] = 1;
+        settings->scope_probe_x10[ch] = 0;
+        settings->scope_vdiv[ch] = 3;
+        settings->scope_coupling_dc[ch] = 1;
+        settings->scope_ch_pos[ch] = 0;
+        settings->scope_measure_mask[ch] = 1;
+    }
     settings_scope_cal_defaults(settings);
 }
 
@@ -60,7 +100,33 @@ static void settings_copy(settings_state_t *dst, const settings_state_t *src) {
     dst->startup_screen = src->startup_screen;
     dst->last_screen = src->last_screen;
     dst->sleep_enabled = src->sleep_enabled;
+    dst->scope_timebase = src->scope_timebase;
+    dst->scope_display = src->scope_display;
+    dst->scope_cursor_mode = src->scope_cursor_mode;
+    dst->scope_trigger_source = src->scope_trigger_source;
+    dst->scope_trigger_mode = src->scope_trigger_mode;
+    dst->scope_trigger_edge = src->scope_trigger_edge;
+    dst->scope_trigger_level = src->scope_trigger_level;
+    dst->scope_afterglow = src->scope_afterglow;
+    dst->scope_active_ch = src->scope_active_ch;
+    dst->scope_measure_param = src->scope_measure_param;
+    dst->scope_measure_visible = src->scope_measure_visible;
+    dst->scope_h_value_pos = src->scope_h_value_pos;
+    dst->scope_h_value_timebase = src->scope_h_value_timebase;
+    dst->siggen_wave = src->siggen_wave;
+    dst->siggen_param = src->siggen_param;
+    dst->siggen_duty_percent = src->siggen_duty_percent;
+    dst->siggen_amp_tenths_v = src->siggen_amp_tenths_v;
+    dst->siggen_freq_unit = src->siggen_freq_unit;
+    dst->siggen_running = src->siggen_running;
+    dst->siggen_freq_hz = src->siggen_freq_hz;
     for (uint8_t ch = 0; ch < SETTINGS_SCOPE_CHANNEL_COUNT; ++ch) {
+        dst->scope_ch_enabled[ch] = src->scope_ch_enabled[ch];
+        dst->scope_probe_x10[ch] = src->scope_probe_x10[ch];
+        dst->scope_vdiv[ch] = src->scope_vdiv[ch];
+        dst->scope_coupling_dc[ch] = src->scope_coupling_dc[ch];
+        dst->scope_ch_pos[ch] = src->scope_ch_pos[ch];
+        dst->scope_measure_mask[ch] = src->scope_measure_mask[ch];
         for (uint8_t range = 0; range < SETTINGS_SCOPE_RANGE_COUNT; ++range) {
             dst->scope_bias[ch][range] = src->scope_bias[ch][range];
             dst->scope_bias_rate[ch][range] = src->scope_bias_rate[ch][range];
@@ -74,10 +140,38 @@ static uint8_t settings_equal(const settings_state_t *a, const settings_state_t 
         a->brightness_level != b->brightness_level ||
         a->startup_screen != b->startup_screen ||
         a->last_screen != b->last_screen ||
-        a->sleep_enabled != b->sleep_enabled) {
+        a->sleep_enabled != b->sleep_enabled ||
+        a->scope_timebase != b->scope_timebase ||
+        a->scope_display != b->scope_display ||
+        a->scope_cursor_mode != b->scope_cursor_mode ||
+        a->scope_trigger_source != b->scope_trigger_source ||
+        a->scope_trigger_mode != b->scope_trigger_mode ||
+        a->scope_trigger_edge != b->scope_trigger_edge ||
+        a->scope_trigger_level != b->scope_trigger_level ||
+        a->scope_afterglow != b->scope_afterglow ||
+        a->scope_active_ch != b->scope_active_ch ||
+        a->scope_measure_param != b->scope_measure_param ||
+        a->scope_measure_visible != b->scope_measure_visible ||
+        a->scope_h_value_pos != b->scope_h_value_pos ||
+        a->scope_h_value_timebase != b->scope_h_value_timebase ||
+        a->siggen_wave != b->siggen_wave ||
+        a->siggen_param != b->siggen_param ||
+        a->siggen_duty_percent != b->siggen_duty_percent ||
+        a->siggen_amp_tenths_v != b->siggen_amp_tenths_v ||
+        a->siggen_freq_unit != b->siggen_freq_unit ||
+        a->siggen_running != b->siggen_running ||
+        a->siggen_freq_hz != b->siggen_freq_hz) {
         return 0;
     }
     for (uint8_t ch = 0; ch < SETTINGS_SCOPE_CHANNEL_COUNT; ++ch) {
+        if (a->scope_ch_enabled[ch] != b->scope_ch_enabled[ch] ||
+            a->scope_probe_x10[ch] != b->scope_probe_x10[ch] ||
+            a->scope_vdiv[ch] != b->scope_vdiv[ch] ||
+            a->scope_coupling_dc[ch] != b->scope_coupling_dc[ch] ||
+            a->scope_ch_pos[ch] != b->scope_ch_pos[ch] ||
+            a->scope_measure_mask[ch] != b->scope_measure_mask[ch]) {
+            return 0;
+        }
         for (uint8_t range = 0; range < SETTINGS_SCOPE_RANGE_COUNT; ++range) {
             if (a->scope_bias[ch][range] != b->scope_bias[ch][range] ||
                 a->scope_bias_rate[ch][range] != b->scope_bias_rate[ch][range]) {
@@ -104,7 +198,75 @@ static void settings_clamp(settings_state_t *settings) {
     if (settings->sleep_enabled >= SETTINGS_SLEEP_COUNT) {
         settings->sleep_enabled = 0;
     }
+    if (settings->scope_timebase >= SETTINGS_SCOPE_TIMEBASE_COUNT) {
+        settings->scope_timebase = SETTINGS_SCOPE_TIMEBASE_DEFAULT;
+    }
+    if (settings->scope_display >= SETTINGS_SCOPE_DISPLAY_COUNT) {
+        settings->scope_display = 0;
+    }
+    if (settings->scope_cursor_mode >= SETTINGS_SCOPE_CURSOR_COUNT) {
+        settings->scope_cursor_mode = 0;
+    }
+    if (settings->scope_trigger_source < 1u || settings->scope_trigger_source > 2u) {
+        settings->scope_trigger_source = 1;
+    }
+    if (settings->scope_trigger_mode >= SETTINGS_SCOPE_TRIGGER_COUNT) {
+        settings->scope_trigger_mode = 0;
+    }
+    settings->scope_trigger_edge = settings->scope_trigger_edge ? 1u : 0u;
+    if (settings->scope_trigger_level < 12u) {
+        settings->scope_trigger_level = 12;
+    } else if (settings->scope_trigger_level > 243u) {
+        settings->scope_trigger_level = 243;
+    }
+    settings->scope_afterglow = settings->scope_afterglow ? 1u : 0u;
+    if (settings->scope_active_ch < 1u || settings->scope_active_ch > 2u) {
+        settings->scope_active_ch = 1;
+    }
+    if (settings->scope_measure_param >= SETTINGS_SCOPE_MEASURE_COUNT) {
+        settings->scope_measure_param = 0;
+    }
+    settings->scope_measure_visible = settings->scope_measure_visible ? 1u : 0u;
+    if (settings->scope_h_value_pos < -120) {
+        settings->scope_h_value_pos = -120;
+    } else if (settings->scope_h_value_pos > 120) {
+        settings->scope_h_value_pos = 120;
+    }
+    if (settings->scope_h_value_timebase >= SETTINGS_SCOPE_TIMEBASE_COUNT) {
+        settings->scope_h_value_timebase = settings->scope_timebase;
+    }
+    if (settings->siggen_wave >= SETTINGS_SIGGEN_WAVE_COUNT) {
+        settings->siggen_wave = SETTINGS_SIGGEN_DEFAULT_WAVE;
+    }
+    if (settings->siggen_param >= SETTINGS_SIGGEN_PARAM_COUNT) {
+        settings->siggen_param = SETTINGS_SIGGEN_DEFAULT_PARAM;
+    }
+    if (settings->siggen_duty_percent < 1u || settings->siggen_duty_percent > 100u) {
+        settings->siggen_duty_percent = SETTINGS_SIGGEN_DEFAULT_DUTY;
+    }
+    if (settings->siggen_amp_tenths_v < 1u || settings->siggen_amp_tenths_v > SETTINGS_SIGGEN_DEFAULT_AMP_TENTHS) {
+        settings->siggen_amp_tenths_v = SETTINGS_SIGGEN_DEFAULT_AMP_TENTHS;
+    }
+    if (settings->siggen_freq_unit >= SETTINGS_SIGGEN_FREQ_UNIT_COUNT) {
+        settings->siggen_freq_unit = 0;
+    }
+    settings->siggen_running = settings->siggen_running ? 1u : 0u;
+    if (settings->siggen_freq_hz < 1u || settings->siggen_freq_hz > SETTINGS_SIGGEN_MAX_FREQ_HZ) {
+        settings->siggen_freq_hz = SETTINGS_SIGGEN_DEFAULT_FREQ_HZ;
+    }
     for (uint8_t ch = 0; ch < SETTINGS_SCOPE_CHANNEL_COUNT; ++ch) {
+        settings->scope_ch_enabled[ch] = settings->scope_ch_enabled[ch] ? 1u : 0u;
+        settings->scope_probe_x10[ch] = settings->scope_probe_x10[ch] ? 1u : 0u;
+        if (settings->scope_vdiv[ch] >= SETTINGS_SCOPE_RANGE_COUNT) {
+            settings->scope_vdiv[ch] = 3;
+        }
+        settings->scope_coupling_dc[ch] = settings->scope_coupling_dc[ch] ? 1u : 0u;
+        if (settings->scope_ch_pos[ch] < -120) {
+            settings->scope_ch_pos[ch] = -120;
+        } else if (settings->scope_ch_pos[ch] > 120) {
+            settings->scope_ch_pos[ch] = 120;
+        }
+        settings->scope_measure_mask[ch] &= (uint8_t)((1u << SETTINGS_SCOPE_MEASURE_COUNT) - 1u);
         for (uint8_t range = 0; range < SETTINGS_SCOPE_RANGE_COUNT; ++range) {
             if (settings->scope_bias[ch][range] > 4095u) {
                 settings->scope_bias[ch][range] = SETTINGS_SCOPE_BIAS_DEFAULT;
@@ -120,6 +282,10 @@ static uint8_t settings_checksum(uint16_t payload) {
     return (uint8_t)((payload & 0xFFu) ^ (payload >> 8) ^ 0xA5u);
 }
 
+static uint8_t settings_state_checksum(uint8_t type, uint16_t payload) {
+    return (uint8_t)(type ^ (payload & 0xFFu) ^ (payload >> 8) ^ 0x3Du);
+}
+
 static uint16_t settings_payload(const settings_state_t *settings) {
     return (uint16_t)((settings->dmm_mode & 0x0Fu) |
                       ((settings->beep_level & 0x07u) << 4) |
@@ -132,6 +298,25 @@ static uint16_t settings_payload(const settings_state_t *settings) {
 static uint32_t settings_record_for(const settings_state_t *settings) {
     uint16_t payload = settings_payload(settings);
     return SETTINGS_RECORD_MAGIC | ((uint32_t)payload << 8) | settings_checksum(payload);
+}
+
+static uint32_t settings_state_record(uint8_t type, uint16_t payload) {
+    return ((uint32_t)type << 24) | ((uint32_t)payload << 8) | settings_state_checksum(type, payload);
+}
+
+static uint8_t settings_encode_pos(int8_t pos) {
+    int16_t value = (int16_t)pos + 128;
+
+    if (value < 0) {
+        value = 0;
+    } else if (value > 255) {
+        value = 255;
+    }
+    return (uint8_t)value;
+}
+
+static int8_t settings_decode_pos(uint8_t value) {
+    return (int8_t)((int16_t)value - 128);
 }
 
 static uint8_t settings_scope_cal_legacy_checksum(uint16_t payload) {
@@ -213,6 +398,120 @@ static uint8_t settings_record_valid(uint32_t record, settings_state_t *settings
     return 1;
 }
 
+static uint8_t settings_state_record_valid(uint32_t record, settings_state_t *settings) {
+    uint8_t type = (uint8_t)(record >> 24);
+    uint16_t payload = (uint16_t)(record >> 8);
+    uint8_t checksum = (uint8_t)record;
+    uint8_t ch;
+
+    if (checksum != settings_state_checksum(type, payload)) {
+        return 0;
+    }
+
+    if (type == SETTINGS_STATE_SCOPE_CORE) {
+        settings->scope_timebase = (uint8_t)(payload & 0x1Fu);
+        settings->scope_display = (uint8_t)((payload >> 5) & 0x03u);
+        settings->scope_cursor_mode = (uint8_t)((payload >> 7) & 0x03u);
+        settings->scope_trigger_source = (payload & (1u << 9)) ? 2u : 1u;
+        settings->scope_trigger_mode = (uint8_t)((payload >> 10) & 0x03u);
+        settings->scope_trigger_edge = (uint8_t)((payload >> 12) & 0x01u);
+        settings->scope_afterglow = (uint8_t)((payload >> 13) & 0x01u);
+        settings->scope_measure_visible = (uint8_t)((payload >> 14) & 0x01u);
+        settings->scope_active_ch = (payload & (1u << 15)) ? 2u : 1u;
+    } else if (type == SETTINGS_STATE_SCOPE_TRIGGER) {
+        settings->scope_trigger_level = (uint8_t)(payload & 0xFFu);
+        settings->scope_measure_param = (uint8_t)((payload >> 8) & 0x07u);
+    } else if (type == SETTINGS_STATE_SCOPE_CH0 || type == SETTINGS_STATE_SCOPE_CH1) {
+        ch = type == SETTINGS_STATE_SCOPE_CH1 ? 1u : 0u;
+        settings->scope_ch_enabled[ch] = (uint8_t)(payload & 0x01u);
+        settings->scope_probe_x10[ch] = (uint8_t)((payload >> 1) & 0x01u);
+        settings->scope_vdiv[ch] = (uint8_t)((payload >> 2) & 0x0Fu);
+        settings->scope_coupling_dc[ch] = (uint8_t)((payload >> 6) & 0x01u);
+        settings->scope_ch_pos[ch] = settings_decode_pos((uint8_t)(payload >> 7));
+    } else if (type == SETTINGS_STATE_SCOPE_MEASURE) {
+        settings->scope_measure_mask[0] = (uint8_t)(payload & 0x3Fu);
+        settings->scope_measure_mask[1] = (uint8_t)((payload >> 6) & 0x3Fu);
+    } else if (type == SETTINGS_STATE_SIGGEN_CORE) {
+        settings->siggen_wave = (uint8_t)(payload & 0x1Fu);
+        settings->siggen_param = (uint8_t)((payload >> 5) & 0x03u);
+        settings->siggen_duty_percent = (uint8_t)((payload >> 7) & 0x7Fu);
+        settings->siggen_running = (uint8_t)((payload >> 14) & 0x01u);
+        settings->siggen_freq_unit = (uint8_t)((payload >> 15) & 0x01u);
+    } else if (type == SETTINGS_STATE_SIGGEN_FREQ_LO) {
+        settings->siggen_freq_hz = (settings->siggen_freq_hz & 0xFFFF0000u) | payload;
+    } else if (type == SETTINGS_STATE_SIGGEN_FREQ_HI) {
+        settings->siggen_freq_hz = (settings->siggen_freq_hz & 0x0000FFFFu) | ((uint32_t)payload << 16);
+    } else if (type == SETTINGS_STATE_SCOPE_POS) {
+        settings->scope_h_value_pos = settings_decode_pos((uint8_t)payload);
+        settings->scope_h_value_timebase = (uint8_t)((payload >> 8) & 0x1Fu);
+        settings->siggen_freq_unit |= (uint8_t)((payload >> 12) & 0x02u);
+    } else {
+        return 0;
+    }
+
+    settings_clamp(settings);
+    return 1;
+}
+
+static void settings_write_state_records(uint32_t *addr, const settings_state_t *settings) {
+    uint16_t payload;
+
+    payload = (uint16_t)((settings->scope_timebase & 0x1Fu) |
+                         ((settings->scope_display & 0x03u) << 5) |
+                         ((settings->scope_cursor_mode & 0x03u) << 7) |
+                         ((settings->scope_trigger_source == 2u ? 1u : 0u) << 9) |
+                         ((settings->scope_trigger_mode & 0x03u) << 10) |
+                         ((settings->scope_trigger_edge & 0x01u) << 12) |
+                         ((settings->scope_afterglow & 0x01u) << 13) |
+                         ((settings->scope_measure_visible & 0x01u) << 14) |
+                         ((settings->scope_active_ch == 2u ? 1u : 0u) << 15));
+    flash_program_word(*addr, settings_state_record(SETTINGS_STATE_SCOPE_CORE, payload));
+    *addr += 4u;
+
+    payload = (uint16_t)((settings->scope_trigger_level & 0xFFu) |
+                         ((settings->scope_measure_param & 0x07u) << 8));
+    flash_program_word(*addr, settings_state_record(SETTINGS_STATE_SCOPE_TRIGGER, payload));
+    *addr += 4u;
+
+    for (uint8_t ch = 0; ch < SETTINGS_SCOPE_CHANNEL_COUNT; ++ch) {
+        payload = (uint16_t)((settings->scope_ch_enabled[ch] & 0x01u) |
+                             ((settings->scope_probe_x10[ch] & 0x01u) << 1) |
+                             ((settings->scope_vdiv[ch] & 0x0Fu) << 2) |
+                             ((settings->scope_coupling_dc[ch] & 0x01u) << 6) |
+                             ((uint16_t)settings_encode_pos(settings->scope_ch_pos[ch]) << 7));
+        flash_program_word(*addr,
+                           settings_state_record(ch ? SETTINGS_STATE_SCOPE_CH1 : SETTINGS_STATE_SCOPE_CH0,
+                                                 payload));
+        *addr += 4u;
+    }
+
+    payload = (uint16_t)((settings->scope_measure_mask[0] & 0x3Fu) |
+                         ((settings->scope_measure_mask[1] & 0x3Fu) << 6));
+    flash_program_word(*addr, settings_state_record(SETTINGS_STATE_SCOPE_MEASURE, payload));
+    *addr += 4u;
+
+    payload = (uint16_t)((settings->siggen_wave & 0x1Fu) |
+                         ((settings->siggen_param & 0x03u) << 5) |
+                         ((settings->siggen_duty_percent & 0x7Fu) << 7) |
+                         ((settings->siggen_running & 0x01u) << 14) |
+                         ((settings->siggen_freq_unit & 0x01u) << 15));
+    flash_program_word(*addr, settings_state_record(SETTINGS_STATE_SIGGEN_CORE, payload));
+    *addr += 4u;
+
+    flash_program_word(*addr, settings_state_record(SETTINGS_STATE_SIGGEN_FREQ_LO,
+                                                    (uint16_t)settings->siggen_freq_hz));
+    *addr += 4u;
+    flash_program_word(*addr, settings_state_record(SETTINGS_STATE_SIGGEN_FREQ_HI,
+                                                    (uint16_t)(settings->siggen_freq_hz >> 16)));
+    *addr += 4u;
+
+    payload = (uint16_t)((settings_encode_pos(settings->scope_h_value_pos) & 0xFFu) |
+                         ((settings->scope_h_value_timebase & 0x1Fu) << 8) |
+                         ((settings->siggen_freq_unit & 0x02u) << 12));
+    flash_program_word(*addr, settings_state_record(SETTINGS_STATE_SCOPE_POS, payload));
+    *addr += 4u;
+}
+
 static uint8_t settings_legacy_record_valid(uint32_t record, uint8_t *mode) {
     uint8_t value = (uint8_t)(record >> 8);
     uint8_t checksum = (uint8_t)record;
@@ -244,6 +543,8 @@ uint8_t settings_load(settings_state_t *settings) {
             settings_copy(&latest, &value);
             found = 1;
         } else if (settings_scope_cal_record_valid(record, &latest)) {
+            found = 1;
+        } else if (settings_state_record_valid(record, &latest)) {
             found = 1;
         } else if (settings_legacy_record_valid(record, &legacy_mode)) {
             latest.dmm_mode = legacy_mode;
@@ -378,6 +679,7 @@ static void settings_write(const settings_state_t *settings) {
             addr += 4u;
         }
     }
+    settings_write_state_records(&addr, settings);
     flash_lock(SETTINGS_FLASH_BASE);
     __asm__ volatile("cpsie i" ::: "memory");
 

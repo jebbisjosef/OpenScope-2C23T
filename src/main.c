@@ -32,6 +32,7 @@ enum {
 
 static void shutdown_now(uint8_t beep) {
     board_dmm_beep_irq_arm(0);
+    ui_note_runtime_settings();
     siggen_shutdown();
     if (beep) {
         board_buzzer_set(1);
