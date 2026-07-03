@@ -9,24 +9,25 @@ typedef struct {
     uint32_t base;
     uint16_t mask;
     uint32_t key;
+    uint8_t active_high;
 } key_pin_t;
 
 static const key_pin_t key_pins[] = {
-    {GPIOB_BASE, 1u << 6, KEY_MOVE},
-    {GPIOB_BASE, 1u << 7, KEY_F2},
-    {GPIOC_BASE, 1u << 14, KEY_F3},
-    {GPIOE_BASE, 1u << 1, KEY_F4},
-    {GPIOB_BASE, 1u << 9, KEY_AUTO},
-    {GPIOE_BASE, 1u << 4, KEY_MENU},
-    {GPIOC_BASE, 1u << 15, KEY_LEFT},
-    {GPIOE_BASE, 1u << 5, KEY_RIGHT},
-    {GPIOE_BASE, 1u << 6, KEY_UP},
-    {GPIOA_BASE, 1u << 3, KEY_DOWN},
-    {GPIOC_BASE, 1u << 13, KEY_OK},
-    {GPIOB_BASE, 1u << 8, KEY_CH1},
-    {GPIOE_BASE, 1u << 2, KEY_CH2},
-    {GPIOE_BASE, 1u << 3, KEY_SAVE},
-    {GPIOD_BASE, 1u << 3, KEY_POWER},
+    {GPIOB_BASE, 1u << 6, KEY_MOVE, 0},
+    {GPIOB_BASE, 1u << 7, KEY_F2, 0},
+    {GPIOC_BASE, 1u << 14, KEY_F3, 0},
+    {GPIOE_BASE, 1u << 1, KEY_F4, 1},
+    {GPIOB_BASE, 1u << 9, KEY_AUTO, 0},
+    {GPIOE_BASE, 1u << 4, KEY_MENU, 0},
+    {GPIOC_BASE, 1u << 15, KEY_LEFT, 0},
+    {GPIOE_BASE, 1u << 5, KEY_RIGHT, 0},
+    {GPIOE_BASE, 1u << 6, KEY_UP, 0},
+    {GPIOA_BASE, 1u << 3, KEY_DOWN, 0},
+    {GPIOC_BASE, 1u << 13, KEY_OK, 0},
+    {GPIOB_BASE, 1u << 8, KEY_CH1, 0},
+    {GPIOE_BASE, 1u << 2, KEY_CH2, 0},
+    {GPIOE_BASE, 1u << 3, KEY_SAVE, 0},
+    {GPIOD_BASE, 1u << 3, KEY_POWER, 0},
 };
 
 static uint16_t g_battery_mv;
@@ -433,14 +434,20 @@ uint8_t battery_is_charging(void) {
 void input_init(void) {
     for (uint32_t i = 0; i < sizeof(key_pins) / sizeof(key_pins[0]); ++i) {
         gpio_config_mask(key_pins[i].base, key_pins[i].mask, 0x8);
-        gpio_set(key_pins[i].base, key_pins[i].mask);
+        if (key_pins[i].active_high) {
+            gpio_clear(key_pins[i].base, key_pins[i].mask);
+        } else {
+            gpio_set(key_pins[i].base, key_pins[i].mask);
+        }
     }
 }
 
 uint32_t input_read_keys(void) {
     uint32_t keys = 0;
     for (uint32_t i = 0; i < sizeof(key_pins) / sizeof(key_pins[0]); ++i) {
-        if (!gpio_read(key_pins[i].base, key_pins[i].mask)) {
+        uint8_t high = gpio_read(key_pins[i].base, key_pins[i].mask) ? 1u : 0u;
+        uint8_t pressed = key_pins[i].active_high ? high : (uint8_t)!high;
+        if (pressed) {
             keys |= key_pins[i].key;
         }
     }
@@ -512,8 +519,56 @@ static uint32_t input_repeat_event(uint32_t now,
     return 0;
 }
 
+static uint32_t input_short_long_event(uint32_t now,
+                                       uint32_t last,
+                                       uint32_t key,
+                                       uint32_t long_key,
+                                       uint16_t *hold_ms,
+                                       uint8_t *long_sent) {
+    enum {
+        INPUT_POLL_MS = 20,
+        LONG_PRESS_MS = 700,
+    };
+
+    if (now & key) {
+        if (!(last & key)) {
+            *hold_ms = 0;
+            *long_sent = 0;
+            return 0;
+        }
+        if (!*long_sent) {
+            if (*hold_ms < LONG_PRESS_MS) {
+                *hold_ms = (uint16_t)(*hold_ms + INPUT_POLL_MS);
+            }
+            if (*hold_ms >= LONG_PRESS_MS) {
+                *long_sent = 1;
+                return long_key;
+            }
+        }
+        return 0;
+    }
+
+    if (last & key) {
+        uint32_t event = *long_sent ? 0u : key;
+        *hold_ms = 0;
+        *long_sent = 0;
+        return event;
+    }
+
+    *hold_ms = 0;
+    *long_sent = 0;
+    return 0;
+}
+
 uint32_t input_pressed_events(void) {
+    enum {
+        SHORT_LONG_KEYS = KEY_MOVE | KEY_F2 | KEY_F3 | KEY_F4 | KEY_AUTO | KEY_SAVE,
+        STARTUP_GUARD_POLLS = 50,
+    };
     static uint32_t last_keys;
+    static uint32_t startup_block_keys;
+    static uint8_t startup_guard_polls = STARTUP_GUARD_POLLS;
+    static uint8_t initialized;
     static uint16_t move_hold_ms;
     static uint16_t f2_hold_ms;
     static uint16_t f3_hold_ms;
@@ -534,121 +589,43 @@ uint32_t input_pressed_events(void) {
     static uint8_t f4_long_sent;
     static uint8_t auto_long_sent;
     static uint8_t save_long_sent;
-    enum {
-        INPUT_POLL_MS = 20,
-        LONG_PRESS_MS = 700,
-    };
     uint32_t now = input_debounced_keys();
-    uint32_t events = now & ~last_keys;
+    uint32_t events;
 
-    events &= ~KEY_F3; // F3/F4/SAVE have distinct short/long actions; emit short on release.
+    if (!initialized) {
+        initialized = 1;
+        startup_block_keys = 0;
+        last_keys = now;
+        return 0;
+    }
+
+    if (startup_guard_polls) {
+        --startup_guard_polls;
+        startup_block_keys |= now & SHORT_LONG_KEYS;
+        last_keys = now;
+        return 0;
+    }
+
+    startup_block_keys &= now;
+    now &= ~startup_block_keys;
+    last_keys &= ~startup_block_keys;
+    events = now & ~last_keys;
+
+    // Keys with long actions emit their short action on release, so a long press
+    // cannot also run the short action first.
+    events &= ~KEY_MOVE;
+    events &= ~KEY_F2;
+    events &= ~KEY_F3;
     events &= ~KEY_F4;
+    events &= ~KEY_AUTO;
     events &= ~KEY_SAVE;
 
-    if (now & KEY_MOVE) {
-        if (!(last_keys & KEY_MOVE)) {
-            move_hold_ms = 0;
-            move_long_sent = 0;
-        } else if (!move_long_sent) {
-            move_hold_ms = move_hold_ms < LONG_PRESS_MS ? (uint16_t)(move_hold_ms + INPUT_POLL_MS) : move_hold_ms;
-            if (move_hold_ms >= LONG_PRESS_MS) {
-                events |= KEY_MOVE_LONG;
-                move_long_sent = 1;
-            }
-        }
-    } else {
-        move_hold_ms = 0;
-        move_long_sent = 0;
-    }
-
-    if (now & KEY_F2) {
-        if (!(last_keys & KEY_F2)) {
-            f2_hold_ms = 0;
-            f2_long_sent = 0;
-        } else if (!f2_long_sent) {
-            f2_hold_ms = f2_hold_ms < LONG_PRESS_MS ? (uint16_t)(f2_hold_ms + INPUT_POLL_MS) : f2_hold_ms;
-            if (f2_hold_ms >= LONG_PRESS_MS) {
-                events |= KEY_F2_LONG;
-                f2_long_sent = 1;
-            }
-        }
-    } else {
-        f2_hold_ms = 0;
-        f2_long_sent = 0;
-    }
-
-    if (now & KEY_F3) {
-        if (!(last_keys & KEY_F3)) {
-            f3_hold_ms = 0;
-            f3_long_sent = 0;
-        } else if (!f3_long_sent) {
-            f3_hold_ms = f3_hold_ms < LONG_PRESS_MS ? (uint16_t)(f3_hold_ms + INPUT_POLL_MS) : f3_hold_ms;
-            if (f3_hold_ms >= LONG_PRESS_MS) {
-                events |= KEY_F3_LONG;
-                f3_long_sent = 1;
-            }
-        }
-    } else {
-        if ((last_keys & KEY_F3) && !f3_long_sent) {
-            events |= KEY_F3;
-        }
-        f3_hold_ms = 0;
-        f3_long_sent = 0;
-    }
-
-    if (now & KEY_F4) {
-        if (!(last_keys & KEY_F4)) {
-            f4_hold_ms = 0;
-            f4_long_sent = 0;
-        } else if (!f4_long_sent) {
-            f4_hold_ms = f4_hold_ms < LONG_PRESS_MS ? (uint16_t)(f4_hold_ms + INPUT_POLL_MS) : f4_hold_ms;
-            if (f4_hold_ms >= LONG_PRESS_MS) {
-                events |= KEY_F4_LONG;
-                f4_long_sent = 1;
-            }
-        }
-    } else {
-        if ((last_keys & KEY_F4) && !f4_long_sent) {
-            events |= KEY_F4;
-        }
-        f4_hold_ms = 0;
-        f4_long_sent = 0;
-    }
-
-    if (now & KEY_AUTO) {
-        if (!(last_keys & KEY_AUTO)) {
-            auto_hold_ms = 0;
-            auto_long_sent = 0;
-        } else if (!auto_long_sent) {
-            auto_hold_ms = auto_hold_ms < LONG_PRESS_MS ? (uint16_t)(auto_hold_ms + INPUT_POLL_MS) : auto_hold_ms;
-            if (auto_hold_ms >= LONG_PRESS_MS) {
-                events |= KEY_AUTO_LONG;
-                auto_long_sent = 1;
-            }
-        }
-    } else {
-        auto_hold_ms = 0;
-        auto_long_sent = 0;
-    }
-
-    if (now & KEY_SAVE) {
-        if (!(last_keys & KEY_SAVE)) {
-            save_hold_ms = 0;
-            save_long_sent = 0;
-        } else if (!save_long_sent) {
-            save_hold_ms = save_hold_ms < LONG_PRESS_MS ? (uint16_t)(save_hold_ms + INPUT_POLL_MS) : save_hold_ms;
-            if (save_hold_ms >= LONG_PRESS_MS) {
-                events |= KEY_SAVE_LONG;
-                save_long_sent = 1;
-            }
-        }
-    } else {
-        if ((last_keys & KEY_SAVE) && !save_long_sent) {
-            events |= KEY_SAVE;
-        }
-        save_hold_ms = 0;
-        save_long_sent = 0;
-    }
+    events |= input_short_long_event(now, last_keys, KEY_MOVE, KEY_MOVE_LONG, &move_hold_ms, &move_long_sent);
+    events |= input_short_long_event(now, last_keys, KEY_F2, KEY_F2_LONG, &f2_hold_ms, &f2_long_sent);
+    events |= input_short_long_event(now, last_keys, KEY_F3, KEY_F3_LONG, &f3_hold_ms, &f3_long_sent);
+    events |= input_short_long_event(now, last_keys, KEY_F4, KEY_F4_LONG, &f4_hold_ms, &f4_long_sent);
+    events |= input_short_long_event(now, last_keys, KEY_AUTO, KEY_AUTO_LONG, &auto_hold_ms, &auto_long_sent);
+    events |= input_short_long_event(now, last_keys, KEY_SAVE, KEY_SAVE_LONG, &save_hold_ms, &save_long_sent);
 
     events |= input_repeat_event(now, last_keys, KEY_LEFT, &left_hold_ms, &left_repeat_ms);
     events |= input_repeat_event(now, last_keys, KEY_RIGHT, &right_hold_ms, &right_repeat_ms);
