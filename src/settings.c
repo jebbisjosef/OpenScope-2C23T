@@ -235,6 +235,24 @@ static void settings_clamp(settings_state_t *settings) {
     if (settings->scope_h_value_timebase >= SETTINGS_SCOPE_TIMEBASE_COUNT) {
         settings->scope_h_value_timebase = settings->scope_timebase;
     }
+    if (settings->scope_math_mode >= 4u) {
+        settings->scope_math_mode = 0u; // Default to OFF
+    }
+    if (settings->scope_math_op >= 3u) {
+        settings->scope_math_op = 0u;   // Default to CH1 + CH2
+    }
+    if (settings->scope_fft_src >= 2u) {
+        settings->scope_fft_src = 0u;   // Default to CH1
+    }
+    if (settings->scope_math_selected >= 3u) {
+        settings->scope_math_selected = 0u; // Default to Row 0
+    }
+    if (settings->scope_fft_window >= 3u) {
+        settings->scope_fft_window = 1u; // Default to Hann window for clean spectrums
+    }
+    if (settings->scope_fft_display >= 3u) {
+        settings->scope_fft_display = 0u; // Default to Normal real-time tracking
+    }
     if (settings->siggen_wave >= SETTINGS_SIGGEN_WAVE_COUNT) {
         settings->siggen_wave = SETTINGS_SIGGEN_DEFAULT_WAVE;
     }
