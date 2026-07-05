@@ -64,6 +64,14 @@ typedef struct {
     uint32_t siggen_freq_hz;
     uint16_t scope_bias[SETTINGS_SCOPE_CHANNEL_COUNT][SETTINGS_SCOPE_RANGE_COUNT];
     uint16_t scope_bias_rate[SETTINGS_SCOPE_CHANNEL_COUNT][SETTINGS_SCOPE_RANGE_COUNT];
+    uint8_t scope_math_mode;     // 0 = OFF, 1 = MATH (A±B), 2 = FFT, 3 = XY MODE
+    uint8_t scope_math_op;       // 0 = CH1 + CH2, 1 = CH1 - CH2, 2 = CH2 - CH1
+    uint8_t scope_fft_src;       // 0 = CH1, 1 = CH2
+    uint8_t scope_math_selected; // Tracks which row inside our custom menu is currently highlighted (0, 1, or 2)
+    uint8_t scope_fft_window;   // 0 = RECTANGULAR, 1 = HANN, 2 = BLACKMAN
+    uint8_t scope_fft_display;  // 0 = NORMAL, 1 = AVERAGE, 2 = MAX HOLD
+    uint8_t scope_hide_traces; // 0=NONE, 1=CH1, 2=CH2, 3=ALL
+
 } settings_state_t;
 
 uint8_t settings_load(settings_state_t *settings);

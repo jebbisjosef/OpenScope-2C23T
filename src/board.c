@@ -589,6 +589,8 @@ uint32_t input_pressed_events(void) {
     static uint8_t f4_long_sent;
     static uint8_t auto_long_sent;
     static uint8_t save_long_sent;
+    static uint16_t ch1_hold_ms;
+    static uint8_t ch1_long_sent;
     uint32_t now = input_debounced_keys();
     uint32_t events;
 
@@ -619,6 +621,7 @@ uint32_t input_pressed_events(void) {
     events &= ~KEY_F4;
     events &= ~KEY_AUTO;
     events &= ~KEY_SAVE;
+    events &= ~KEY_CH1;
 
     events |= input_short_long_event(now, last_keys, KEY_MOVE, KEY_MOVE_LONG, &move_hold_ms, &move_long_sent);
     events |= input_short_long_event(now, last_keys, KEY_F2, KEY_F2_LONG, &f2_hold_ms, &f2_long_sent);
@@ -631,6 +634,8 @@ uint32_t input_pressed_events(void) {
     events |= input_repeat_event(now, last_keys, KEY_RIGHT, &right_hold_ms, &right_repeat_ms);
     events |= input_repeat_event(now, last_keys, KEY_UP, &up_hold_ms, &up_repeat_ms);
     events |= input_repeat_event(now, last_keys, KEY_DOWN, &down_hold_ms, &down_repeat_ms);
+
+    events |= input_short_long_event(now, last_keys, KEY_CH1, KEY_CH1_LONG, &ch1_hold_ms, &ch1_long_sent);
 
     last_keys = now;
     return events;
