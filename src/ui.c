@@ -34,7 +34,7 @@
 #define GEN_FREQ_UNIT_COUNT 3u
 #define GEN_DUTY_EDIT_DIGITS 3u
 #define GEN_AMP_EDIT_DIGITS 2u
-#define FIRMWARE_VERSION_TEXT "v2026.06.4"
+#define FIRMWARE_VERSION_TEXT "v2026.07.1"
 #ifndef SCOPE_UI_SAFE_STUB
 #define SCOPE_UI_SAFE_STUB 1
 #endif
@@ -1649,7 +1649,7 @@ static void ui_draw_fft_spectrum(uint16_t gx, uint16_t gy, uint16_t gw, uint16_t
         fft_input_buffer[i] -= mean;
     }
 
-    compute_fft_128(fft_input_buffer, fft_output_buffer, scope_fft_window);
+    compute_fft(fft_input_buffer, fft_output_buffer, scope_fft_window);
 
     uint16_t num_bins = FFT_SIZE / 2u;
     uint16_t peak_bin = 1u;

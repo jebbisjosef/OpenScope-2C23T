@@ -59,7 +59,7 @@ static uint8_t fft_bit_reverse(uint8_t index) {
 }
 
 // Coley-Tukey FFT
-void compute_fft_128(const float *input_real, float *output_magnitude, uint8_t window_type) {
+void compute_fft(const float *input_real, float *output_magnitude, uint8_t window_type) {
     static complex_t data[FFT_SIZE];
     
     // Bit-reversal sorting step combined with Windowing Function
