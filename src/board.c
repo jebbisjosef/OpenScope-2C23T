@@ -562,7 +562,7 @@ static uint32_t input_short_long_event(uint32_t now,
 
 uint32_t input_pressed_events(void) {
     enum {
-        SHORT_LONG_KEYS = KEY_MOVE | KEY_F2 | KEY_F3 | KEY_F4 | KEY_AUTO | KEY_SAVE,
+        SHORT_LONG_KEYS = KEY_MOVE | KEY_F2 | KEY_F3 | KEY_F4 | KEY_AUTO | KEY_SAVE | KEY_CH1,
         STARTUP_GUARD_POLLS = 50,
     };
     static uint32_t last_keys;

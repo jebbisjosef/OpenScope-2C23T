@@ -50,10 +50,9 @@ static float local_sqrt(float x) {
 // bit-reversal
 static uint8_t fft_bit_reverse(uint8_t index) {
     uint8_t rev = 0;
-    uint8_t len = 7; // log2(128) = 7 bits
-    for (uint8_t i = 0; i < len; i++) {
+    for (uint8_t i = 0; i < FFT_BITS; i++) {
         if (index & (1 << i)) {
-            rev |= (1 << (len - 1 - i));
+            rev |= (1u << (FFT_BITS - 1u - i));
         }
     }
     return rev;

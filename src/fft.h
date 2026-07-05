@@ -3,7 +3,8 @@
 
 #include <stdint.h>
 
-#define FFT_SIZE 128
+#define FFT_SIZE 256
+#define FFT_BITS 8
 
 
 void compute_fft_128(const float *input_real, float *output_magnitude, uint8_t window_type);

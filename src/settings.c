@@ -80,7 +80,7 @@ static void settings_defaults(settings_state_t *settings) {
     settings->scope_math_op = 0;
     settings->scope_fft_src = 0;
     settings->scope_math_selected = 0;
-    settings->scope_fft_window = 1;
+    settings->scope_fft_window = 0;
     settings->scope_fft_display = 0;
     settings->scope_hide_traces = 3;
     settings->siggen_wave = SETTINGS_SIGGEN_DEFAULT_WAVE;
@@ -270,7 +270,7 @@ static void settings_clamp(settings_state_t *settings) {
         settings->scope_math_selected = 0u; // Default to Row 0
     }
     if (settings->scope_fft_window >= 4u) {
-        settings->scope_fft_window = 1u; // Default to Hann window for clean spectrums
+        settings->scope_fft_window = 0u; // Default to Hann window for clean spectrums
     }
     if (settings->scope_fft_display >= 4u) {
         settings->scope_fft_display = 0u; // Default to Normal real-time tracking

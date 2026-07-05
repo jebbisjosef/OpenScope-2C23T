@@ -300,6 +300,8 @@ static uint8_t scope_fft_window = 0;  // 0 = HANN, 1 = HAMMING, 2 = BLACKMAN, 3 
 static uint8_t scope_fft_display = 0; // 0 = NORMAL, 1 = AVERAGING, 2 = MAX HOLD
 // Static array to preserve history across frames for display processing
 static float fft_history[FFT_SIZE / 2] = {0.0f};
+static float fft_input_buffer[FFT_SIZE];
+static float fft_output_buffer[FFT_SIZE / 2];
 static uint8_t scope_hide_traces = 0; // 0=NONE, 1=CH1, 2=CH2, 3=ALL
 static int32_t dmm_rel_ref_milli;
 static char dmm_hold_value[10];
@@ -620,8 +622,11 @@ static uint32_t scope_vdiv_mv(void);
 static int32_t scope_raw_delta_mv(uint8_t idx, uint8_t raw);
 static void scope_format_signed_mv(char out[11], int32_t mv);
 static void scope_format_u32(char *out, uint32_t value);
+static uint16_t scope_visible_sample_count(void);
+static int32_t scope_h_pos_sample_offset(void);
 static void scope_format_delta_time(char out[14]);
 static void scope_format_delta_level(char out[14]);
+static void scope_format_frequency_reading(char out[12], uint32_t hz);
 static void scope_text_copy(char *dst, const char *src, uint8_t max_len);
 static void ui_text_append(char *dst, const char *src, uint8_t max_len);
 static void scope_step_measure_param(int8_t dir);
@@ -1580,225 +1585,147 @@ static void ui_draw_math_menu(void) {
 
 
 static void ui_draw_fft_spectrum(uint16_t gx, uint16_t gy, uint16_t gw, uint16_t gh) {
-    if (scope_fft_src == 0) {
+    if (scope_fft_src != 1u && scope_fft_src != 2u) {
+        return;
+    }
+    if (ui.scope_display != SCOPE_DISPLAY_YT || scope_slow_roll_active() || !scope_frame_valid) {
         return;
     }
 
-    // Map targets to selected channels: 0 for CH1, 1 for CH2
-    uint8_t target_ch = (scope_fft_src == 1) ? 0 : 1;
-
-    // Safety verification check on live buffers
-    if (!scope_trace_cache[target_ch].valid) {
+    uint8_t target_ch = (uint8_t)(scope_fft_src - 1u);
+    if (target_ch >= 2u || !scope_ch_enabled[target_ch]) {
         return;
     }
 
-    float fft_input[FFT_SIZE] = {0.0f};
-    float fft_output[FFT_SIZE / 2] = {0.0f};
-
-    // Interpolate 101 samples smoothly across 128 slots
-    // SCOPE_TRACE_MAX_POINTS = 101
-    for (int i = 0; i < FFT_SIZE; i++) {
-        float raw_pos = ((float)i * 100.0f) / (float)(FFT_SIZE - 1);
-        
-        int idx_low = (int)raw_pos;
-        int idx_high = idx_low + 1;
-        if (idx_high > 100) idx_high = 100;
-        
-        float weight = raw_pos - (float)idx_low;
-
-        float y_low = (float)(scope_trace_cache[target_ch].y[idx_low] - scope_trace_cache[target_ch].center);
-        float y_high = (float)(scope_trace_cache[target_ch].y[idx_high] - scope_trace_cache[target_ch].center);
-
-        fft_input[i] = y_low + weight * (y_high - y_low);
+    uint16_t visible_samples = scope_visible_sample_count();
+    if (visible_samples < 2u) {
+        return;
+    }
+    if (visible_samples > SCOPE_SAMPLE_COUNT) {
+        visible_samples = SCOPE_SAMPLE_COUNT;
     }
 
-    // Actual FFT
-    compute_fft_128(fft_input, fft_output, scope_fft_window);
+    uint16_t source_count = visible_samples < FFT_SIZE ? visible_samples : FFT_SIZE;
+    int32_t h_offset = scope_trigger_locked ? 0 : scope_h_pos_sample_offset();
+    int32_t base = (int32_t)scope_trigger_offset + h_offset;
+    float sum = 0.0f;
 
-    // Process display modes (NORMAL, AVERAGING, MAX HOLD)
-    uint16_t num_bins = FFT_SIZE / 2;
-    
-    for (int i = 0; i < num_bins; i++) {
-        if (scope_fft_display == 1) { 
-            fft_history[i] = (0.25f * fft_output[i]) + (0.75f * fft_history[i]);
-            fft_output[i] = fft_history[i];
-        } 
-        else if (scope_fft_display == 2) {
-            if (fft_output[i] > fft_history[i]) {
-                fft_history[i] = fft_output[i];
-            }
-            fft_output[i] = fft_history[i];
-        } 
-        else {
-            fft_history[i] = fft_output[i];
+    for (uint16_t i = 0; i < FFT_SIZE; ++i) {
+        fft_input_buffer[i] = 0.0f;
+    }
+
+    for (uint16_t i = 0; i < source_count; ++i) {
+        float sample_pos;
+        uint16_t idx_low;
+        uint16_t idx_high;
+        float weight;
+        float value;
+
+        if (visible_samples <= FFT_SIZE) {
+            sample_pos = (float)i;
+        } else {
+            sample_pos = ((float)i * (float)(visible_samples - 1u)) / (float)(FFT_SIZE - 1u);
         }
-    }
-
-    // dynamic frequency axis bounds from live hardware timebase setup
-    uint32_t ns_per_div = scope_timebase_unit_ns[scope_h_value_timebase < SCOPE_TIMEBASE_COUNT ? scope_h_value_timebase : scope_safe_timebase()];
-    float total_screen_time_seconds = (float)(ns_per_div * 100) / 1000000000.0f; 
-    float sample_rate_hz = 101.0f / total_screen_time_seconds;
-    float f_max_hz = sample_rate_hz / 2.0f;
-
-    // frequency bins and axis lines
-    uint16_t bar_color = RGB565(0, 180, 255); 
-    uint16_t axis_color = RGB565(150, 150, 150); 
-    uint16_t text_bg = RGB565(30, 30, 45);        
-    uint16_t y_bottom = (uint16_t)(gy + gh - 2);
-
-    // Solid horizontal line right across the top of the FFT spectrum window
-    uint16_t y_axis_top = gy + 2; 
-    lcd_line(gx, y_axis_top, gx + gw, y_axis_top, axis_color);
-
-    // Left edge marker (0Hz)
-    lcd_text(gx, y_axis_top + 4, "0Hz", RGB565(180, 180, 180), text_bg, 1);
-    
-    // RIght edge marker (fmax)
-    uint32_t fmax_whole = 0;
-    uint32_t fmax_dec = 0;
-    uint8_t fmax_is_mhz = 0;
-
-    if (f_max_hz >= 1000000.0f) {
-        fmax_whole = (uint32_t)(f_max_hz / 1000000.0f);
-        fmax_dec = (uint32_t)((f_max_hz / 1000000.0f - fmax_whole) * 100.0f);
-        fmax_is_mhz = 1;
-    } else {
-        fmax_whole = (uint32_t)(f_max_hz / 1000.0f);
-        fmax_dec = (uint32_t)((f_max_hz / 1000.0f - fmax_whole) * 100.0f);
-    }
-
-    uint16_t fmax_x = gx + gw - 48; 
-    char fmax_buf[4];
-
-    if (fmax_whole >= 100) {
-        fmax_buf[0] = '0' + (fmax_whole / 100);
-        fmax_buf[1] = '0' + ((fmax_whole % 100) / 10);
-        fmax_buf[2] = '0' + (fmax_whole % 10);
-        fmax_buf[3] = '\0';
-        lcd_text(fmax_x, y_axis_top + 4, fmax_buf, RGB565(180, 180, 180), text_bg, 1);
-        fmax_x += 18;
-    } else if (fmax_whole >= 10) {
-        fmax_buf[0] = '0' + (fmax_whole / 10);
-        fmax_buf[1] = '0' + (fmax_whole % 10);
-        fmax_buf[2] = '\0';
-        lcd_text(fmax_x, y_axis_top + 4, fmax_buf, RGB565(180, 180, 180), text_bg, 1);
-        fmax_x += 12;
-    } else {
-        fmax_buf[0] = '0' + fmax_whole;
-        fmax_buf[1] = '\0';
-        lcd_text(fmax_x, y_axis_top + 4, fmax_buf, RGB565(180, 180, 180), text_bg, 1);
-        fmax_x += 6;
-    }
-
-    lcd_text(fmax_x, y_axis_top + 4, ".", RGB565(180, 180, 180), text_bg, 1);
-    fmax_x += 6;
-
-    fmax_buf[0] = '0' + (fmax_dec / 10);
-    fmax_buf[1] = '0' + (fmax_dec % 10);
-    fmax_buf[2] = '\0';
-    lcd_text(fmax_x, y_axis_top + 4, fmax_buf, RGB565(180, 180, 180), text_bg, 1);
-    fmax_x += 12;
-
-    if (fmax_is_mhz) {
-        lcd_text(fmax_x, y_axis_top + 4, "MHz", RGB565(180, 180, 180), text_bg, 1);
-    } else {
-        lcd_text(fmax_x, y_axis_top + 4, "kHz", RGB565(180, 180, 180), text_bg, 1);
-    }
-
-    // spectrum bar
-    for (uint16_t i = 1; i < num_bins; i++) {
-        uint16_t x_pos = (uint16_t)(gx + (i * gw) / num_bins);
-        int16_t bar_height = (int16_t)(fft_output[i] * 1.8f);
-        
-        if (bar_height > (int16_t)(gh - 6)) {
-            bar_height = (int16_t)(gh - 6); 
+        idx_low = (uint16_t)sample_pos;
+        idx_high = (uint16_t)(idx_low + 1u);
+        if (idx_high >= visible_samples) {
+            idx_high = (uint16_t)(visible_samples - 1u);
         }
+        weight = sample_pos - (float)idx_low;
 
-        uint16_t y_top = (uint16_t)(y_bottom - bar_height);
-
-        if (bar_height > 1) {
-            lcd_line(x_pos, y_bottom, x_pos, y_top, bar_color);
-        }
+        uint16_t sample_idx0 = (uint16_t)((uint32_t)(base + (int32_t)idx_low) & (SCOPE_SAMPLE_COUNT - 1u));
+        uint16_t sample_idx1 = (uint16_t)((uint32_t)(base + (int32_t)idx_high) & (SCOPE_SAMPLE_COUNT - 1u));
+        float v0 = (float)scope_raw_delta_mv(target_ch,
+            scope_samples[(uint16_t)(sample_idx0 * 2u + target_ch)]);
+        float v1 = (float)scope_raw_delta_mv(target_ch,
+            scope_samples[(uint16_t)(sample_idx1 * 2u + target_ch)]);
+        value = v0 + (v1 - v0) * weight;
+        fft_input_buffer[i] = value;
+        sum += value;
     }
 
-    // highest spectrum bar bin (skipping bin 0 to avoid false DC offset peaks)
-    uint16_t peak_bin = 1;
+    float mean = sum / (float)source_count;
+    for (uint16_t i = 0; i < source_count; ++i) {
+        fft_input_buffer[i] -= mean;
+    }
+
+    compute_fft_128(fft_input_buffer, fft_output_buffer, scope_fft_window);
+
+    uint16_t num_bins = FFT_SIZE / 2u;
+    uint16_t peak_bin = 1u;
     float max_amplitude = 0.0f;
-
-    for (uint16_t i = 1; i < num_bins; i++) {
-        if (fft_output[i] > max_amplitude) {
-            max_amplitude = fft_output[i];
+    for (uint16_t i = 1u; i < num_bins; ++i) {
+        if (scope_fft_display == 1u) {
+            fft_history[i] = (0.25f * fft_output_buffer[i]) + (0.75f * fft_history[i]);
+            fft_output_buffer[i] = fft_history[i];
+        } else if (scope_fft_display == 2u) {
+            if (fft_output_buffer[i] > fft_history[i]) {
+                fft_history[i] = fft_output_buffer[i];
+            }
+            fft_output_buffer[i] = fft_history[i];
+        } else {
+            fft_history[i] = fft_output_buffer[i];
+        }
+        if (fft_output_buffer[i] > max_amplitude) {
+            max_amplitude = fft_output_buffer[i];
             peak_bin = i;
         }
     }
-
-    float peak_frequency_hz = ((float)peak_bin * f_max_hz) / (float)num_bins;
-
-    // Centering the start coordinate: (gx + gw / 2) - 32 pixels back.
-    uint16_t print_x = (uint16_t)((gx + (gw / 2)) - 32);
-    uint16_t print_y = (uint16_t)(y_axis_top + 4); // Placed right inline with 0Hz and Fmax labels
-    uint16_t text_color = RGB565(255, 255, 0);     // High contrast Yellow
-
-    lcd_text(print_x, print_y, "Peak: ", text_color, text_bg, 1);
-    print_x += 36; 
-
-    uint32_t whole_part = 0;
-    uint32_t dec_part = 0;
-    uint8_t is_mhz = 0;
-    uint8_t is_khz = 0;
-
-    if (peak_frequency_hz >= 1000000.0f) {
-        whole_part = (uint32_t)(peak_frequency_hz / 1000000.0f);
-        dec_part = (uint32_t)((peak_frequency_hz / 1000000.0f - whole_part) * 100.0f);
-        is_mhz = 1;
-    } else if (peak_frequency_hz >= 1000.0f) {
-        whole_part = (uint32_t)(peak_frequency_hz / 1000.0f);
-        dec_part = (uint32_t)((peak_frequency_hz / 1000.0f - whole_part) * 100.0f);
-        is_khz = 1;
-    } else {
-        whole_part = (uint32_t)peak_frequency_hz;
+    fft_history[0] = fft_output_buffer[0];
+    if (max_amplitude <= 0.0f) {
+        return;
     }
 
-    char digit_buf[4] = "000\0";
-    if (whole_part >= 100) {
-        digit_buf[0] = '0' + (whole_part / 100);
-        digit_buf[1] = '0' + ((whole_part % 100) / 10);
-        digit_buf[2] = '0' + (whole_part % 10);
-        digit_buf[3] = '\0';
-        lcd_text(print_x, print_y, digit_buf, text_color, text_bg, 1);
-        print_x += 18;
-    } else if (whole_part >= 10) {
-        digit_buf[0] = '0' + (whole_part / 10);
-        digit_buf[1] = '0' + (whole_part % 10);
-        digit_buf[2] = '\0';
-        lcd_text(print_x, print_y, digit_buf, text_color, text_bg, 1);
-        print_x += 12;
-    } else {
-        digit_buf[0] = '0' + whole_part;
-        digit_buf[1] = '\0';
-        lcd_text(print_x, print_y, digit_buf, text_color, text_bg, 1);
-        print_x += 6;
+    float effective_sample_ns = (float)scope_sample_period_ns();
+    if (visible_samples > FFT_SIZE) {
+        effective_sample_ns *= (float)(visible_samples - 1u) / (float)(FFT_SIZE - 1u);
+    }
+    float sample_rate_hz = 1000000000.0f / effective_sample_ns;
+    float f_max_hz = sample_rate_hz / 2.0f;
+    float hz_per_bin = sample_rate_hz / (float)FFT_SIZE;
+
+    uint16_t bar_color = RGB565(0, 180, 255);
+    uint16_t axis_color = RGB565(150, 150, 150);
+    uint16_t text_bg = RGB565(30, 30, 45);
+    uint16_t y_bottom = (uint16_t)(gy + gh - 2u);
+    uint16_t y_axis_top = (uint16_t)(gy + 2u);
+    char freq_label[12];
+
+    lcd_line(gx, y_axis_top, (uint16_t)(gx + gw), y_axis_top, axis_color);
+    lcd_text(gx, (uint16_t)(y_axis_top + 4u), "0.0HZ", RGB565(180, 180, 180), text_bg, 1);
+
+    scope_format_frequency_reading(freq_label, (uint32_t)(f_max_hz + 0.5f));
+    lcd_text(gx + gw > 72u ? (uint16_t)(gx + gw - 72u) : gx,
+             (uint16_t)(y_axis_top + 4u),
+             freq_label,
+             RGB565(180, 180, 180),
+             text_bg,
+             1);
+
+    for (uint16_t i = 1u; i < num_bins; ++i) {
+        uint16_t x_pos = (uint16_t)(gx + ((uint32_t)i * gw) / num_bins);
+        int16_t bar_height = (int16_t)((fft_output_buffer[i] * (float)(gh - 8u)) / max_amplitude);
+        if (bar_height > (int16_t)(gh - 6u)) {
+            bar_height = (int16_t)(gh - 6u);
+        }
+        if (bar_height > 1) {
+            lcd_line(x_pos, y_bottom, x_pos, (uint16_t)(y_bottom - bar_height), bar_color);
+        }
     }
 
-    if (is_khz || is_mhz) {
-        lcd_text(print_x, print_y, ".", text_color, text_bg, 1);
-        print_x += 6;
-
-        char dec_buf[3];
-        dec_buf[0] = '0' + (dec_part / 10);
-        dec_buf[1] = '0' + (dec_part % 10);
-        dec_buf[2] = '\0';
-        lcd_text(print_x, print_y, dec_buf, text_color, text_bg, 1);
-        print_x += 12;
-    }
-
-    if (is_mhz) {
-        lcd_text(print_x, print_y, " MHz", text_color, text_bg, 1);
-    } else if (is_khz) {
-        lcd_text(print_x, print_y, " kHz", text_color, text_bg, 1);
-    } else {
-        lcd_text(print_x, print_y, " Hz", text_color, text_bg, 1);
-    }
+    scope_format_frequency_reading(freq_label, (uint32_t)((float)peak_bin * hz_per_bin + 0.5f));
+    lcd_text((uint16_t)(gx + gw / 2u - 30u),
+             (uint16_t)(y_axis_top + 4u),
+             "PK",
+             RGB565(255, 255, 0),
+             text_bg,
+             1);
+    lcd_text((uint16_t)(gx + gw / 2u - 12u),
+             (uint16_t)(y_axis_top + 4u),
+             freq_label,
+             RGB565(255, 255, 0),
+             text_bg,
+             1);
 }
 
 static void draw_softkey(uint8_t slot, const char *label, uint16_t accent) {
@@ -8255,8 +8182,14 @@ void ui_handle_keys(uint32_t events) {
 
     if (events == 0) return;
 
-    // Toggle menu visibility on long press
-    if (events & KEY_CH1_LONG) {
+    if (ui_math_menu_visible && (ui.mode != UI_MODE_SCOPE || ui.overlay != UI_OVERLAY_NONE)) {
+        ui_math_menu_visible = 0;
+    }
+
+    if ((events & KEY_CH1_LONG) &&
+        ui.mode == UI_MODE_SCOPE &&
+        ui.overlay == UI_OVERLAY_NONE &&
+        (!scope_any_menu_open() || ui_math_menu_visible)) {
         ui_math_menu_visible = !ui_math_menu_visible;
         if (ui_math_menu_visible) {
             scope_math_mode = ui_settings.scope_math_mode;
@@ -8276,7 +8209,7 @@ void ui_handle_keys(uint32_t events) {
         return; 
     }
 
-    if (ui_math_menu_visible) {
+    if (ui_math_menu_visible && ui.mode == UI_MODE_SCOPE && ui.overlay == UI_OVERLAY_NONE) {
         if (events & KEY_SAVE_LONG) {
             capture_screenshot_now();
             return; 
@@ -8318,7 +8251,7 @@ void ui_handle_keys(uint32_t events) {
                 if (scope_fft_src != 3) { // Protect option
                     if (scope_fft_display > 0) scope_fft_display--;
                     else scope_fft_display = 2; 
-                    for (int i = 0; i < 64; i++) {
+                    for (uint16_t i = 0; i < FFT_SIZE / 2u; ++i) {
                         fft_history[i] = 0.0f;
                     }
                 }
@@ -8355,7 +8288,7 @@ void ui_handle_keys(uint32_t events) {
                 if (scope_fft_src != 3) { // Protect option
                     if (scope_fft_display < 2) scope_fft_display++;
                     else scope_fft_display = 0; 
-                    for (int i = 0; i < 64; i++) { 
+                    for (uint16_t i = 0; i < FFT_SIZE / 2u; ++i) {
                         fft_history[i] = 0.0f;
                     }
                 }
