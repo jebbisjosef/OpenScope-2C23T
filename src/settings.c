@@ -82,7 +82,7 @@ static void settings_defaults(settings_state_t *settings) {
     settings->scope_math_selected = 0;
     settings->scope_fft_window = 0;
     settings->scope_fft_display = 0;
-    settings->scope_hide_traces = 3;
+    settings->scope_hide_traces = 0;
     settings->siggen_wave = SETTINGS_SIGGEN_DEFAULT_WAVE;
     settings->siggen_param = SETTINGS_SIGGEN_DEFAULT_PARAM;
     settings->siggen_duty_percent = SETTINGS_SIGGEN_DEFAULT_DUTY;
@@ -276,7 +276,7 @@ static void settings_clamp(settings_state_t *settings) {
         settings->scope_fft_display = 0u; // Default to Normal real-time tracking
     }
     if (settings->scope_hide_traces >= 4u) {
-        settings->scope_hide_traces = 3u; // Default to all (Hide all traces)
+        settings->scope_hide_traces = 0u;
     }
     if (settings->siggen_wave >= SETTINGS_SIGGEN_WAVE_COUNT) {
         settings->siggen_wave = SETTINGS_SIGGEN_DEFAULT_WAVE;

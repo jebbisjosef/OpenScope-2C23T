@@ -1312,6 +1312,10 @@ static void scope_sanitize_state(void) {
     if (scope_measure_param >= SCOPE_MEASURE_COUNT) {
         scope_measure_param = SCOPE_MEASURE_VPP;
     }
+    if (scope_hide_traces >= 4u ||
+        (scope_hide_traces == 3u && !scope_math_mode && !scope_fft_src)) {
+        scope_hide_traces = 0u;
+    }
     scope_measure_mask[0] &= scope_measure_valid_mask();
     scope_measure_mask[1] &= scope_measure_valid_mask();
     if (ui.scope_trigger_level < 12u) {
