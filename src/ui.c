@@ -291,16 +291,16 @@ static int16_t scope_roll_display_offset;
 static int16_t scope_after_y[2][SCOPE_TRACE_MAX_POINTS];
 static uint8_t scope_after_count[2];
 static uint8_t scope_after_valid[2];
-static uint8_t ui_math_cursor_row = 0; // 0=MODE, 1=MATH OP, 2=FFT SRC
 static uint8_t ui_math_menu_visible = 0; // 0 = Hidden, 1 = Displayed on Screen
-static uint8_t ui_math_mode_on      = 0; // 0 = OFF, 1 = ON
-static uint8_t ui_math_op           = 0; // 0 = A+B, 1 = A-B, 2 = B-A
-static uint8_t ui_fft_mode          = 0; // 0 = OFF, 1 = CH1, 2 = CH2
-static uint8_t ui_fft_window = 0;  // 0 = HANN, 1 = HAMMING, 2 = BLACKMAN, 3 = RECTANGLE
-static uint8_t ui_fft_display = 0; // 0 = NORMAL, 1 = AVERAGING, 2 = MAX HOLD
+static uint8_t scope_math_selected = 0; // 0=MODE, 1=MATH OP, 2=FFT DISPLAY/XY, 3=WINDOW, 4=CLEAR HISTORY, 5=HIDE TRACES
+static uint8_t scope_math_mode = 0; // 0 = OFF, 1 = ON
+static uint8_t scope_math_op = 0; // 0 = A+B, 1 = A-B, 2 = B-A
+static uint8_t scope_fft_src = 0; // 0 = OFF, 1 = CH1, 2 = CH2, 3 = XY MODE
+static uint8_t scope_fft_window = 0;  // 0 = HANN, 1 = HAMMING, 2 = BLACKMAN, 3 = RECTANGLE
+static uint8_t scope_fft_display = 0; // 0 = NORMAL, 1 = AVERAGING, 2 = MAX HOLD
 // Static array to preserve history across frames for display processing
 static float fft_history[FFT_SIZE / 2] = {0.0f};
-static uint8_t ui_hide_traces = 0; // 0=NONE, 1=CH1, 2=CH2, 3=ALL
+static uint8_t scope_hide_traces = 0; // 0=NONE, 1=CH1, 2=CH2, 3=ALL
 static int32_t dmm_rel_ref_milli;
 static char dmm_hold_value[10];
 static char dmm_hold_unit[6];
@@ -331,6 +331,13 @@ static void ui_settings_copy(settings_state_t *dst, const settings_state_t *src)
     dst->scope_measure_visible = src->scope_measure_visible;
     dst->scope_h_value_pos = src->scope_h_value_pos;
     dst->scope_h_value_timebase = src->scope_h_value_timebase;
+    dst->scope_math_mode = src->scope_math_mode;
+    dst->scope_math_op = src->scope_math_op;
+    dst->scope_fft_src = src->scope_fft_src;
+    dst->scope_math_selected = src->scope_math_selected;
+    dst->scope_fft_window = src->scope_fft_window;
+    dst->scope_fft_display = src->scope_fft_display;
+    dst->scope_hide_traces = src->scope_hide_traces;
     dst->siggen_wave = src->siggen_wave;
     dst->siggen_param = src->siggen_param;
     dst->siggen_duty_percent = src->siggen_duty_percent;
@@ -1528,55 +1535,57 @@ static void ui_draw_math_menu(void) {
     uint16_t color_fg, color_bg;
 
     // Math Enable
-    color_bg = (ui_math_cursor_row == 0) ? RGB565(0, 120, 240) : RGB565(30, 30, 45);
+    color_bg = (scope_math_selected == 0) ? RGB565(0, 120, 240) : RGB565(30, 30, 45);
     color_fg = RGB565(255, 255, 255);
     lcd_rect(box_x + 8, box_y + 26, box_w - 16, 14, color_bg);
     lcd_text(box_x + 12, box_y + 29, "MATH MODE:", color_fg, color_bg, 1);
-    lcd_text(box_x + 110, box_y + 29, math_status_text[ui_math_mode_on], color_fg, color_bg, 1);
+    lcd_text(box_x + 110, box_y + 29, math_status_text[scope_math_mode], color_fg, color_bg, 1);
 
     // Math Equation Operator
-    color_bg = (ui_math_cursor_row == 1) ? RGB565(0, 120, 240) : RGB565(30, 30, 45);
-    color_fg = (ui_math_mode_on) ? RGB565(255, 255, 255) : RGB565(120, 120, 120); // Dim line if Math is OFF
+    color_bg = (scope_math_selected == 1) ? RGB565(0, 120, 240) : RGB565(30, 30, 45);
+    color_fg = (scope_math_mode) ? RGB565(255, 255, 255) : RGB565(120, 120, 120); // Dim line if Math is OFF
     lcd_rect(box_x + 8, box_y + 44, box_w - 16, 14, color_bg);
     lcd_text(box_x + 12, box_y + 47, "MATH OP:", color_fg, color_bg, 1);
-    lcd_text(box_x + 110, box_y + 47, math_op_text[ui_math_op], color_fg, color_bg, 1);
+    lcd_text(box_x + 110, box_y + 47, math_op_text[scope_math_op], color_fg, color_bg, 1);
 
     // FFT Target Channel Source
-    color_bg = (ui_math_cursor_row == 2) ? RGB565(0, 120, 240) : RGB565(30, 30, 45);
+    color_bg = (scope_math_selected == 2) ? RGB565(0, 120, 240) : RGB565(30, 30, 45);
     color_fg = RGB565(255, 255, 255);
     lcd_rect(box_x + 8, box_y + 62, box_w - 16, 14, color_bg);
     lcd_text(box_x + 12, box_y + 65, "FFT MODE:", color_fg, color_bg, 1);
-    lcd_text(box_x + 110, box_y + 65, fft_status_text[ui_fft_mode], color_fg, color_bg, 1);
+    lcd_text(box_x + 110, box_y + 65, fft_status_text[scope_fft_src], color_fg, color_bg, 1);
 
     // FFT window func
-    color_bg = (ui_math_cursor_row == 3) ? RGB565(0, 120, 240) : RGB565(30, 30, 45);
-    color_fg = (ui_fft_mode > 0) ? RGB565(255, 255, 255) : RGB565(120, 120, 120); // Dim if FFT is OFF
+    color_bg = (scope_math_selected == 3) ? RGB565(0, 120, 240) : RGB565(30, 30, 45);
+    // Dim if FFT is OFF (0) OR set to XY MODE (3)
+    color_fg = (scope_fft_src == 1 || scope_fft_src == 2) ? RGB565(255, 255, 255) : RGB565(120, 120, 120); 
     lcd_rect(box_x + 8, box_y + 80, box_w - 16, 14, color_bg);
     lcd_text(box_x + 12, box_y + 83, "FFT WINDOW:", color_fg, color_bg, 1);
-    lcd_text(box_x + 110, box_y + 83, fft_window_text[ui_fft_window], color_fg, color_bg, 1);
+    lcd_text(box_x + 110, box_y + 83, fft_window_text[scope_fft_window], color_fg, color_bg, 1);
 
     // FFT display mode
-    color_bg = (ui_math_cursor_row == 4) ? RGB565(0, 120, 240) : RGB565(30, 30, 45);
-    color_fg = (ui_fft_mode > 0) ? RGB565(255, 255, 255) : RGB565(120, 120, 120); // Dim if FFT is OFF
+    color_bg = (scope_math_selected == 4) ? RGB565(0, 120, 240) : RGB565(30, 30, 45);
+    // Dim if FFT is OFF (0) OR set to XY MODE (3)
+    color_fg = (scope_fft_src == 1 || scope_fft_src == 2) ? RGB565(255, 255, 255) : RGB565(120, 120, 120); 
     lcd_rect(box_x + 8, box_y + 98, box_w - 16, 14, color_bg);
     lcd_text(box_x + 12, box_y + 101, "FFT DISPLAY:", color_fg, color_bg, 1);
-    lcd_text(box_x + 110, box_y + 101, fft_display_text[ui_fft_display], color_fg, color_bg, 1);
+    lcd_text(box_x + 110, box_y + 101, fft_display_text[scope_fft_display], color_fg, color_bg, 1);
 
-    color_bg = (ui_math_cursor_row == 5) ? RGB565(0, 120, 240) : RGB565(30, 30, 45);
+    color_bg = (scope_math_selected == 5) ? RGB565(0, 120, 240) : RGB565(30, 30, 45);
     color_fg = RGB565(255, 255, 255);
     lcd_rect(box_x + 8, box_y + 116, box_w - 16, 14, color_bg);
     lcd_text(box_x + 12, box_y + 119, "HIDE TRACES:", color_fg, color_bg, 1);
-    lcd_text(box_x + 110, box_y + 119, hide_traces_text[ui_hide_traces], color_fg, color_bg, 1);
+    lcd_text(box_x + 110, box_y + 119, hide_traces_text[scope_hide_traces], color_fg, color_bg, 1);
 }
 
 
 static void ui_draw_fft_spectrum(uint16_t gx, uint16_t gy, uint16_t gw, uint16_t gh) {
-    if (ui_fft_mode == 0) {
+    if (scope_fft_src == 0) {
         return;
     }
 
     // Map targets to selected channels: 0 for CH1, 1 for CH2
-    uint8_t target_ch = (ui_fft_mode == 1) ? 0 : 1;
+    uint8_t target_ch = (scope_fft_src == 1) ? 0 : 1;
 
     // Safety verification check on live buffers
     if (!scope_trace_cache[target_ch].valid) {
@@ -1604,17 +1613,17 @@ static void ui_draw_fft_spectrum(uint16_t gx, uint16_t gy, uint16_t gw, uint16_t
     }
 
     // Actual FFT
-    compute_fft_128(fft_input, fft_output, ui_fft_window);
+    compute_fft_128(fft_input, fft_output, scope_fft_window);
 
     // Process display modes (NORMAL, AVERAGING, MAX HOLD)
     uint16_t num_bins = FFT_SIZE / 2;
     
     for (int i = 0; i < num_bins; i++) {
-        if (ui_fft_display == 1) { 
+        if (scope_fft_display == 1) { 
             fft_history[i] = (0.25f * fft_output[i]) + (0.75f * fft_history[i]);
             fft_output[i] = fft_history[i];
         } 
-        else if (ui_fft_display == 2) {
+        else if (scope_fft_display == 2) {
             if (fft_output[i] > fft_history[i]) {
                 fft_history[i] = fft_output[i];
             }
@@ -4996,10 +5005,10 @@ static void draw_scope_afterglow_trace(uint8_t ch,
         return;
     }
 
-    if (ch == 0 && (ui_hide_traces == 1 || ui_hide_traces == 3)) {
+    if (ch == 0 && (scope_hide_traces == 1 || scope_hide_traces == 3)) {
         return;
     }
-    if (ch == 1 && (ui_hide_traces == 2 || ui_hide_traces == 3)) {
+    if (ch == 1 && (scope_hide_traces == 2 || scope_hide_traces == 3)) {
         return;
     }
 
@@ -5029,7 +5038,7 @@ static void draw_scope_xy(uint16_t gx, uint16_t gy, uint16_t gw, uint16_t gh, ui
         return;
     }
 
-    if (ui_hide_traces > 0) {
+    if (scope_hide_traces > 0) {
         return;
     }
 
@@ -5133,10 +5142,10 @@ static void draw_scope_slow_roll_trace(uint8_t ch,
         return;
     }
 
-    if (ch == 0 && (ui_hide_traces == 1 || ui_hide_traces == 3)) {
+    if (ch == 0 && (scope_hide_traces == 1 || scope_hide_traces == 3)) {
         return;
     }
-    if (ch == 1 && (ui_hide_traces == 2 || ui_hide_traces == 3)) {
+    if (ch == 1 && (scope_hide_traces == 2 || scope_hide_traces == 3)) {
         return;
     }
 
@@ -5195,10 +5204,10 @@ static void draw_scope_trace(uint16_t color,
         return;
     }
 
-    if (!ch2 && (ui_hide_traces == 1 || ui_hide_traces == 3)) {
+    if (!ch2 && (scope_hide_traces == 1 || scope_hide_traces == 3)) {
         return; 
     }
-    if (ch2 && (ui_hide_traces == 2 || ui_hide_traces == 3)) {
+    if (ch2 && (scope_hide_traces == 2 || scope_hide_traces == 3)) {
         return; 
     }
 
@@ -5313,7 +5322,7 @@ static void draw_scope(void) {
 }
 
 static void ui_draw_math_waveform(uint16_t gx, uint16_t gy, uint16_t gw, uint16_t gh) {
-    if (!ui_math_mode_on) {
+    if (!scope_math_mode) {
         return;
     }
 
@@ -5340,11 +5349,11 @@ static void ui_draw_math_waveform(uint16_t gx, uint16_t gy, uint16_t gw, uint16_
 
         int16_t computed_y = center_y;
 
-        if (ui_math_op == 0) {       // CH1 + CH2
+        if (scope_math_op == 0) {       // CH1 + CH2
             computed_y = (int16_t)(center_y + ch1_val + ch2_val);
-        } else if (ui_math_op == 1) { // CH1 - CH2
+        } else if (scope_math_op == 1) { // CH1 - CH2
             computed_y = (int16_t)(center_y + ch1_val - ch2_val);
-        } else if (ui_math_op == 2) { // CH2 - CH1
+        } else if (scope_math_op == 2) { // CH2 - CH1
             computed_y = (int16_t)(center_y + ch2_val - ch1_val);
         }
 
@@ -6371,6 +6380,13 @@ void ui_init(void) {
         scope_cursor_store_level_from_raw(i);
     }
     ui_apply_saved_runtime_settings();
+    scope_math_mode = ui_settings.scope_math_mode;
+    scope_math_op = ui_settings.scope_math_op;
+    scope_fft_src = ui_settings.scope_fft_src;
+    scope_math_selected = ui_settings.scope_math_selected;
+    scope_fft_window = ui_settings.scope_fft_window;
+    scope_fft_display = ui_settings.scope_fft_display;
+    scope_hide_traces = ui_settings.scope_hide_traces;
     ui.dmm_mode = dmm_sanitize_mode(ui_settings.dmm_mode);
     if (start_mode == UI_MODE_DMM) {
         ui.dmm_mode = DMM_MODE_AUTO;
@@ -6604,6 +6620,13 @@ void ui_note_runtime_settings(void) {
     ui_settings.scope_measure_visible = scope_measure_visible ? 1u : 0u;
     ui_settings.scope_h_value_pos = scope_h_value_pos;
     ui_settings.scope_h_value_timebase = scope_h_value_timebase;
+    ui_settings.scope_math_mode = scope_math_mode;
+    ui_settings.scope_math_op = scope_math_op;
+    ui_settings.scope_fft_src = scope_fft_src;
+    ui_settings.scope_math_selected = scope_math_selected;
+    ui_settings.scope_fft_window = scope_fft_window;
+    ui_settings.scope_fft_display = scope_fft_display;
+    ui_settings.scope_hide_traces = scope_hide_traces;
 
     for (uint8_t ch = 0; ch < 2u; ++ch) {
         ui_settings.scope_ch_enabled[ch] = scope_ch_enabled[ch] ? 1u : 0u;
@@ -8235,6 +8258,20 @@ void ui_handle_keys(uint32_t events) {
     // Toggle menu visibility on long press
     if (events & KEY_CH1_LONG) {
         ui_math_menu_visible = !ui_math_menu_visible;
+        if (ui_math_menu_visible) {
+            scope_math_mode = ui_settings.scope_math_mode;
+            scope_math_op = ui_settings.scope_math_op;
+            scope_fft_src = ui_settings.scope_fft_src;
+            scope_math_selected = ui_settings.scope_math_selected;
+            scope_fft_window = ui_settings.scope_fft_window;
+            scope_fft_display = ui_settings.scope_fft_display;
+            scope_hide_traces = ui_settings.scope_hide_traces;
+            if (scope_fft_src == 3) {
+                ui.scope_display = SCOPE_DISPLAY_XY; 
+            } else {
+                ui.scope_display = SCOPE_DISPLAY_YT;
+            }
+        }
         ui_render_local_change();
         return; 
     }
@@ -8246,82 +8283,104 @@ void ui_handle_keys(uint32_t events) {
         }
 
         if (events & KEY_DOWN) {
-            if (ui_math_cursor_row > 0) ui_math_cursor_row--;
-            else ui_math_cursor_row = 5; // Wrap around to bottom row
+            if (scope_math_selected > 0) scope_math_selected--;
+            else scope_math_selected = 5; // Wrap around to bottom row
         }
         else if (events & KEY_UP) {
-            if (ui_math_cursor_row < 5) ui_math_cursor_row++;
-            else ui_math_cursor_row = 0;
+            if (scope_math_selected < 5) scope_math_selected++;
+            else scope_math_selected = 0;
         }
         
         else if (events & KEY_LEFT) {
-            if (ui_math_cursor_row == 0) { // Math Mode Toggle
-                ui_math_mode_on = !ui_math_mode_on;
+            if (scope_math_selected == 0) { // Math Mode Toggle
+                scope_math_mode = !scope_math_mode;
             }
-            else if (ui_math_cursor_row == 1) { // Operator Selection
-                if (ui_math_op > 0) ui_math_op--;
-                else ui_math_op = 2;
+            else if (scope_math_selected == 1) { // Operator Selection
+                if (scope_math_op > 0) scope_math_op--;
+                else scope_math_op = 2;
             }
-            else if (ui_math_cursor_row == 2) { // FFT Mode De/Selection
-                if (ui_fft_mode > 0) ui_fft_mode--;
-                else ui_fft_mode = 3;
-                if (ui_fft_mode == 3) {
+            else if (scope_math_selected == 2) { // FFT Mode De/Selection
+                if (scope_fft_src > 0) scope_fft_src--;
+                else scope_fft_src = 3;
+                if (scope_fft_src == 3) {
                         ui.scope_display = SCOPE_DISPLAY_XY; 
                     } else {
                         ui.scope_display = SCOPE_DISPLAY_YT;
                     }
             }
-            else if (ui_math_cursor_row == 3) {
-                if (ui_fft_window > 0) ui_fft_window--;
-                else ui_fft_window = 3; 
-            } else if (ui_math_cursor_row == 4) {
-                if (ui_fft_display > 0) ui_fft_display--;
-                else ui_fft_display = 2; 
-                for (int i = 0; i < 64; i++) {
-                    fft_history[i] = 0.0f;
+            else if (scope_math_selected == 3) { 
+                if (scope_fft_src != 3) { // Protect option
+                    if (scope_fft_window > 0) scope_fft_window--;
+                    else scope_fft_window = 3; 
+                }
+            } 
+            else if (scope_math_selected == 4) { 
+                if (scope_fft_src != 3) { // Protect option
+                    if (scope_fft_display > 0) scope_fft_display--;
+                    else scope_fft_display = 2; 
+                    for (int i = 0; i < 64; i++) {
+                        fft_history[i] = 0.0f;
+                    }
                 }
             }
-            else if (ui_math_cursor_row == 5) { 
-                if (ui_hide_traces > 0) ui_hide_traces--;
-                else ui_hide_traces = 3;
+            else if (scope_math_selected == 5) { 
+                if (scope_hide_traces > 0) scope_hide_traces--;
+                else scope_hide_traces = 3;
             }
         }
         else if (events & KEY_RIGHT) {
-            if (ui_math_cursor_row == 0) { // Math Mode Toggle
-                ui_math_mode_on = !ui_math_mode_on;
+            if (scope_math_selected == 0) { // Math Mode Toggle
+                scope_math_mode = !scope_math_mode;
             }
-            else if (ui_math_cursor_row == 1) { // Operator Selection
-                if (ui_math_op < 2) ui_math_op++;
-                else ui_math_op = 0;
+            else if (scope_math_selected == 1) { // Operator Selection
+                if (scope_math_op < 2) scope_math_op++;
+                else scope_math_op = 0;
             }
-            else if (ui_math_cursor_row == 2) { // FFT Mode De/Selection
-                if (ui_fft_mode < 3) ui_fft_mode++;
-                else ui_fft_mode = 0;
-                if (ui_fft_mode == 3) {
+            else if (scope_math_selected == 2) { // FFT Mode De/Selection
+                if (scope_fft_src < 3) scope_fft_src++;
+                else scope_fft_src = 0;
+                if (scope_fft_src == 3) {
                         ui.scope_display = SCOPE_DISPLAY_XY; 
                     } else {
                         ui.scope_display = SCOPE_DISPLAY_YT;
                     }
             }
-            else if (ui_math_cursor_row == 3) { // FFT window
-                if (ui_fft_window < 3) ui_fft_window++;
-                else  ui_fft_window = 0;
-            } else if (ui_math_cursor_row == 4) {
-                if (ui_fft_display < 2) ui_fft_display++;
-                else ui_fft_display = 0; 
-                for (int i = 0; i < 64; i++) { //FFT display
-                    fft_history[i] = 0.0f;
+            else if (scope_math_selected == 3) { 
+                if (scope_fft_src != 3) { // Protect option
+                    if (scope_fft_window < 3) scope_fft_window++;
+                    else  scope_fft_window = 0;
+                }
+            } 
+            else if (scope_math_selected == 4) { 
+                if (scope_fft_src != 3) { // Protect option
+                    if (scope_fft_display < 2) scope_fft_display++;
+                    else scope_fft_display = 0; 
+                    for (int i = 0; i < 64; i++) { 
+                        fft_history[i] = 0.0f;
+                    }
                 }
             }
-            else if (ui_math_cursor_row == 5) {
-                if (ui_hide_traces < 3) ui_hide_traces++;
-                else ui_hide_traces = 0;
+            else if (scope_math_selected == 5) {
+                if (scope_hide_traces < 3) scope_hide_traces++;
+                else scope_hide_traces = 0;
             }
         }
         
         // Dismiss Menu
         else if (events & (KEY_OK | KEY_MENU)) {
             ui_math_menu_visible = 0;
+
+            ui_settings.scope_math_mode = scope_math_mode; 
+            ui_settings.scope_math_op = scope_math_op;
+            ui_settings.scope_fft_src = scope_fft_src;    
+            ui_settings.scope_fft_window = scope_fft_window;
+            ui_settings.scope_fft_display = scope_fft_display;
+            ui_settings.scope_hide_traces = scope_hide_traces;
+            ui_settings.scope_math_selected = scope_math_selected;
+
+            settings_note(&ui_settings);
+            settings_flush();
+
         }
 
         ui_render_local_change();

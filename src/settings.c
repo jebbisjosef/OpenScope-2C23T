@@ -23,10 +23,11 @@ enum {
     SETTINGS_STATE_SIGGEN_FREQ_LO = 0xCFu,
     SETTINGS_STATE_SIGGEN_FREQ_HI = 0xD0u,
     SETTINGS_STATE_SCOPE_POS = 0xD1u,
+    SETTINGS_STATE_MATH_MENU = 0xD2u,
     SETTINGS_SCOPE_BIAS_DEFAULT = 1861u,
     SETTINGS_SCOPE_BIAS_RATE_DEFAULT = 505u,
     SETTINGS_SCOPE_CAL_WORDS = SETTINGS_SCOPE_CHANNEL_COUNT * SETTINGS_SCOPE_RANGE_COUNT * 2,
-    SETTINGS_STATE_WORDS = 9u,
+    SETTINGS_STATE_WORDS = 10u,
     SETTINGS_WRITE_BYTES = 4u * (1u + SETTINGS_SCOPE_CAL_WORDS + SETTINGS_STATE_WORDS),
     FLASH_BANK2_BASE = 0x08080000u,
     FLASH_STS_BSY = 1u << 0,
@@ -75,6 +76,13 @@ static void settings_defaults(settings_state_t *settings) {
     settings->scope_measure_visible = 1;
     settings->scope_h_value_pos = 0;
     settings->scope_h_value_timebase = SETTINGS_SCOPE_TIMEBASE_DEFAULT;
+    settings->scope_math_mode = 0;
+    settings->scope_math_op = 0;
+    settings->scope_fft_src = 0;
+    settings->scope_math_selected = 0;
+    settings->scope_fft_window = 1;
+    settings->scope_fft_display = 0;
+    settings->scope_hide_traces = 3;
     settings->siggen_wave = SETTINGS_SIGGEN_DEFAULT_WAVE;
     settings->siggen_param = SETTINGS_SIGGEN_DEFAULT_PARAM;
     settings->siggen_duty_percent = SETTINGS_SIGGEN_DEFAULT_DUTY;
@@ -113,6 +121,13 @@ static void settings_copy(settings_state_t *dst, const settings_state_t *src) {
     dst->scope_measure_visible = src->scope_measure_visible;
     dst->scope_h_value_pos = src->scope_h_value_pos;
     dst->scope_h_value_timebase = src->scope_h_value_timebase;
+    dst->scope_math_mode = src->scope_math_mode;
+    dst->scope_math_op = src->scope_math_op;
+    dst->scope_fft_src = src->scope_fft_src;
+    dst->scope_math_selected = src->scope_math_selected;
+    dst->scope_fft_window = src->scope_fft_window;
+    dst->scope_fft_display = src->scope_fft_display;
+    dst->scope_hide_traces = src->scope_hide_traces;
     dst->siggen_wave = src->siggen_wave;
     dst->siggen_param = src->siggen_param;
     dst->siggen_duty_percent = src->siggen_duty_percent;
@@ -154,6 +169,13 @@ static uint8_t settings_equal(const settings_state_t *a, const settings_state_t 
         a->scope_measure_visible != b->scope_measure_visible ||
         a->scope_h_value_pos != b->scope_h_value_pos ||
         a->scope_h_value_timebase != b->scope_h_value_timebase ||
+        a->scope_math_mode != b->scope_math_mode ||
+        a->scope_math_op != b->scope_math_op ||
+        a->scope_fft_src != b->scope_fft_src ||
+        a->scope_math_selected != b->scope_math_selected ||
+        a->scope_fft_window != b->scope_fft_window ||
+        a->scope_fft_display != b->scope_fft_display ||
+        a->scope_hide_traces != b->scope_hide_traces ||
         a->siggen_wave != b->siggen_wave ||
         a->siggen_param != b->siggen_param ||
         a->siggen_duty_percent != b->siggen_duty_percent ||
@@ -235,22 +257,22 @@ static void settings_clamp(settings_state_t *settings) {
     if (settings->scope_h_value_timebase >= SETTINGS_SCOPE_TIMEBASE_COUNT) {
         settings->scope_h_value_timebase = settings->scope_timebase;
     }
-    if (settings->scope_math_mode >= 4u) {
+    if (settings->scope_math_mode >= 2u) {
         settings->scope_math_mode = 0u; // Default to OFF
     }
     if (settings->scope_math_op >= 3u) {
         settings->scope_math_op = 0u;   // Default to CH1 + CH2
     }
-    if (settings->scope_fft_src >= 2u) {
-        settings->scope_fft_src = 0u;   // Default to CH1
+    if (settings->scope_fft_src >= 4u) {
+        settings->scope_fft_src = 0u;
     }
-    if (settings->scope_math_selected >= 3u) {
+    if (settings->scope_math_selected >= 6u) {
         settings->scope_math_selected = 0u; // Default to Row 0
     }
-    if (settings->scope_fft_window >= 3u) {
+    if (settings->scope_fft_window >= 4u) {
         settings->scope_fft_window = 1u; // Default to Hann window for clean spectrums
     }
-    if (settings->scope_fft_display >= 3u) {
+    if (settings->scope_fft_display >= 4u) {
         settings->scope_fft_display = 0u; // Default to Normal real-time tracking
     }
     if (settings->scope_hide_traces >= 4u) {
@@ -466,6 +488,14 @@ static uint8_t settings_state_record_valid(uint32_t record, settings_state_t *se
         settings->scope_h_value_pos = settings_decode_pos((uint8_t)payload);
         settings->scope_h_value_timebase = (uint8_t)((payload >> 8) & 0x1Fu);
         settings->siggen_freq_unit |= (uint8_t)((payload >> 12) & 0x02u);
+    } else if (type == SETTINGS_STATE_MATH_MENU) {
+        settings->scope_math_mode     = (uint8_t)(payload & 0x01u);
+        settings->scope_math_op       = (uint8_t)((payload >> 1) & 0x03u);
+        settings->scope_fft_src       = (uint8_t)((payload >> 3) & 0x03u);
+        settings->scope_math_selected = (uint8_t)((payload >> 5) & 0x07u);
+        settings->scope_fft_window    = (uint8_t)((payload >> 8) & 0x03u);
+        settings->scope_fft_display   = (uint8_t)((payload >> 10) & 0x03u);
+        settings->scope_hide_traces   = (uint8_t)((payload >> 12) & 0x03u);
     } else {
         return 0;
     }
@@ -530,6 +560,16 @@ static void settings_write_state_records(uint32_t *addr, const settings_state_t 
                          ((settings->scope_h_value_timebase & 0x1Fu) << 8) |
                          ((settings->siggen_freq_unit & 0x02u) << 12));
     flash_program_word(*addr, settings_state_record(SETTINGS_STATE_SCOPE_POS, payload));
+    *addr += 4u;
+
+    payload = (uint16_t)((settings->scope_math_mode & 0x01u) |
+                         ((settings->scope_math_op & 0x03u) << 1) |
+                         ((settings->scope_fft_src & 0x03u) << 3) |
+                         ((settings->scope_math_selected & 0x07u) << 5) |
+                         ((settings->scope_fft_window & 0x03u) << 8) |
+                         ((settings->scope_fft_display & 0x03u) << 10) |
+                         ((settings->scope_hide_traces & 0x03u) << 12));
+    flash_program_word(*addr, settings_state_record(SETTINGS_STATE_MATH_MENU, payload));
     *addr += 4u;
 }
 
