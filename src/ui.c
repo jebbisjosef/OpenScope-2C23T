@@ -10,6 +10,7 @@
 #include "siggen.h"
 #include "scope.h"
 #include "usb_msc.h"
+#include "fft.h"
 
 #include <stdint.h>
 
@@ -5311,6 +5312,56 @@ static void draw_scope(void) {
     draw_scope_chrome_live();
 }
 
+static void ui_draw_math_waveform(uint16_t gx, uint16_t gy, uint16_t gw, uint16_t gh) {
+    if (!ui_math_mode_on) {
+        return;
+    }
+
+    if (!scope_trace_cache[0].valid || !scope_trace_cache[1].valid) {
+        return;
+    }
+
+    int16_t center_y = (int16_t)(gy + gh / 2u);
+    int16_t prev_y = -1;
+    uint16_t math_color = RGB565(255, 0, 255); // Pink/Magenta
+
+    uint16_t sample_count = scope_trace_cache[0].count;
+    if (sample_count > SCOPE_TRACE_MAX_POINTS) {
+        sample_count = SCOPE_TRACE_MAX_POINTS;
+    }
+
+    // Sweep across the horizontal sample points
+    for (uint16_t i = 0; i < sample_count; ++i) {
+
+        uint16_t x = (uint16_t)(gx + ((uint32_t)i * gw) / (SCOPE_TRACE_MAX_POINTS - 1u));
+
+        int16_t ch1_val = (int16_t)(scope_trace_cache[0].y[i] - scope_trace_cache[0].center);
+        int16_t ch2_val = (int16_t)(scope_trace_cache[1].y[i] - scope_trace_cache[1].center);
+
+        int16_t computed_y = center_y;
+
+        if (ui_math_op == 0) {       // CH1 + CH2
+            computed_y = (int16_t)(center_y + ch1_val + ch2_val);
+        } else if (ui_math_op == 1) { // CH1 - CH2
+            computed_y = (int16_t)(center_y + ch1_val - ch2_val);
+        } else if (ui_math_op == 2) { // CH2 - CH1
+            computed_y = (int16_t)(center_y + ch2_val - ch1_val);
+        }
+
+        // Keep trace bound completely inside the grid box lines
+        if (computed_y < gy + 1) computed_y = gy + 1;
+        if (computed_y > gy + gh - 2) computed_y = gy + gh - 2;
+
+        // Redraw live continuous connection points
+        if (prev_y != -1 && i > 0) {
+            // Find previous x pixel position
+            uint16_t prev_x = (uint16_t)(gx + ((uint32_t)(i - 1) * gw) / (SCOPE_TRACE_MAX_POINTS - 1u));
+            lcd_line(prev_x, (uint16_t)prev_y, x, (uint16_t)computed_y, math_color);
+        }
+        prev_y = computed_y;
+    }
+}
+
 static void draw_scope_immersive(void) {
     const uint16_t grid_bg = RGB565(4, 8, 11);
     uint16_t gx = 8;
@@ -5385,6 +5436,8 @@ static void draw_scope_immersive(void) {
                 draw_scope_trace(C_CH1, 0, plot_x0, ch1_center, 64, plot_w, gy, gh);
                 draw_scope_trace(C_CH2, 1, plot_x0, ch2_center, 64, plot_w, gy, gh);
             }
+            ui_draw_math_waveform(gx, gy, gw, gh);
+            ui_draw_fft_spectrum(gx, gy, gw, gh);
             draw_scope_channel_markers(gx, gy, gh, ch1_center, ch2_center, grid_bg);
         }
         draw_scope_trigger_line(gx, gy, gw, gh, grid_bg);
@@ -5397,6 +5450,7 @@ static void draw_scope_immersive(void) {
     }
 
     draw_scope_scale_status(220, grid_bg);
+    ui_draw_math_menu();
 }
 
 static uint8_t gen_clamped_duty(void) {

@@ -25,6 +25,7 @@ enum {
     KEY_AUTO_LONG = 1u << 19,
     KEY_SAVE_LONG = 1u << 20,
     KEY_F4_LONG = 1u << 21,
+    KEY_CH1_LONG = 1u << 22,
 };
 
 void delay_ms(uint32_t ms);
