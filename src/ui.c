@@ -6178,6 +6178,7 @@ static void ui_switch_mode(ui_mode_t mode) {
     if (mode != UI_MODE_DMM) {
         dmm_live_wire_alert = 0;
         dmm_pause();
+        dmm_hw4_set_mode_gate(0);
     }
     ui.mode = mode;
     ui.overlay = UI_OVERLAY_NONE;

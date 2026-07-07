@@ -20,6 +20,7 @@ In addition to the stock multimeter, oscilloscope, and signal generator function
 
 - **Extended signal-generator waveforms:** sine, square, triangle, sawtooth, half wave, full wave, noise, DC, positive/reverse step, exponential rise/fall, multi-audio, sinker pulse, and Lorentz.
 - **True RMS oscilloscope measurement** based on captured samples instead of the simplified stock-style approximation.
+- **FFT spectrum view** for checking the frequency content and harmonics of captured oscilloscope signals.
 - **Redesigned UI and control flow** for multimeter, oscilloscope, signal generator, menu, and settings screens.
 - **Improved oscilloscope controls** with channel menus, trigger setup, move/cursor/measurement menus, rolling display, and clearer scale/readout handling.
 - **Runtime USB mass storage** while the device is running.
@@ -27,6 +28,23 @@ In addition to the stock multimeter, oscilloscope, and signal generator function
 - **Screenshot capture** to the device storage.
 - **Configurable settings** for brightness, beep volume, sleep behavior, and startup screen.
 - **Separate release binaries** for old and newer hardware revisions.
+
+## FFT Spectrum
+
+The oscilloscope includes an FFT spectrum view for inspecting the dominant frequency and harmonic content of the captured signal.
+
+To open it:
+
+1. Open `Oscilloscope` from the main menu.
+2. Long-press `CH1` to open the `Analytical / Math` menu.
+3. Use the up/down arrow keys to move through the menu items.
+4. Use the left/right arrow keys to change the selected item.
+5. Set `FFT MODE` to `CH1 ENABLED` or `CH2 ENABLED`.
+6. Press the center `OK/HOLD` button or `MENU` to close the menu.
+
+Use the regular oscilloscope channel, voltage/div, and time/div controls to adjust the captured signal before viewing the spectrum.
+
+Screenshots of the FFT view can be added here.
 
 ## Build
 

@@ -16,7 +16,6 @@ enum {
     USART_CTRL1_TE = 1u << 3,
     USART_CTRL1_RXNEIE = 1u << 5,
     USART_CTRL1_UE = 1u << 13,
-    USART_CTRL3_HW4_DMM_STOCK = (1u << 2) | (1u << 3) | (1u << 4),
 
     DMM_FRAME_LEN = 9,
     DMM_CMD_LEN = 10,
@@ -25,6 +24,7 @@ enum {
     DMM_BAUD_RETRY_MS = 600,
     DMM_MODE_SWITCH_SETTLE_MS = 120,
     DMM_POWER_SETTLE_MS = 45,
+    DMM_HW4_MODE_GATE_PIN = 1u << 10,
 };
 
 #ifndef DMM_UART_BAUD
@@ -78,6 +78,20 @@ static char dmm_status[9] = "B0 RX00";
 static void text_copy(char *dst, const char *src, uint8_t max_len);
 static void format_unit(uint8_t flags_a, uint8_t flags_b, uint8_t flags_c, char out[6]);
 static void dmm_send_mode_command(uint8_t mode_index);
+
+void dmm_hw4_set_mode_gate(uint8_t active) {
+#if HW_TARGET_HW40
+    // Stock HW4 firmware drives PC10 high while the DMM/voltage frontend is active.
+    gpio_config_mask(GPIOC_BASE, DMM_HW4_MODE_GATE_PIN, 0x1u);
+    if (active) {
+        gpio_set(GPIOC_BASE, DMM_HW4_MODE_GATE_PIN);
+    } else {
+        gpio_clear(GPIOC_BASE, DMM_HW4_MODE_GATE_PIN);
+    }
+#else
+    (void)active;
+#endif
+}
 
 static uint32_t rcc_sysclk_hz(void) {
     static const uint8_t ahb_shift[] = {
@@ -147,11 +161,7 @@ static void dmm_uart_apply_brr(uint16_t brr) {
 }
 
 static void dmm_uart_apply_ctrl3(void) {
-#if HW_TARGET_HW40
-    USART_CTRL3(USART3_BASE) = USART_CTRL3_HW4_DMM_STOCK;
-#else
     USART_CTRL3(USART3_BASE) = 0;
-#endif
 }
 
 static void dmm_uart_drain_rx(void) {
@@ -854,6 +864,8 @@ void dmm_init(void) {
 #if !HW_TARGET_HW40
     gpio_config_mask(GPIOC_BASE, 1u << 6, 0x1u);  // DMM IC enable
     gpio_set(GPIOC_BASE, 1u << 6);
+#else
+    dmm_hw4_set_mode_gate(1);
 #endif
 
     USART_CTRL2(USART3_BASE) = 0;
@@ -872,15 +884,20 @@ void dmm_pause(void) {
         return;
     }
 
+#if HW_TARGET_HW40
+    dmm_valid = 0;
+    dmm_synthetic_valid = 0;
+    dmm_numeric_valid = 0;
+    dmm_rx_reset_counters();
+#else
     USART_CTRL1(USART3_BASE) = 0;
-#if !HW_TARGET_HW40
     gpio_clear(GPIOC_BASE, 1u << 6);
-#endif
     dmm_powered = 0;
     dmm_valid = 0;
     dmm_synthetic_valid = 0;
     dmm_numeric_valid = 0;
     dmm_rx_reset_counters();
+#endif
 }
 
 static void dmm_resume_power(void) {
@@ -905,7 +922,11 @@ void dmm_reenter(uint8_t mode_index) {
         return;
     }
 
+#if HW_TARGET_HW40
+    dmm_hw4_set_mode_gate(1);
+#else
     USART_CTRL1(USART3_BASE) = 0;
+#endif
     dmm_powered = 0;
     dmm_valid = 0;
     dmm_synthetic_valid = 0;
@@ -923,7 +944,11 @@ void dmm_reenter(uint8_t mode_index) {
 #endif
 
     dmm_uart_apply_ctrl3();
+#if HW_TARGET_HW40
+    USART_CTRL1(USART3_BASE) |= USART_CTRL1_UE | USART_CTRL1_RXNEIE | USART_CTRL1_TE | USART_CTRL1_RE;
+#else
     dmm_uart_apply_brr(dmm_current_brr());
+#endif
     dmm_powered = 1;
     dmm_current_mode = mode_index;
     dmm_apply_missing_uart_fallback();
