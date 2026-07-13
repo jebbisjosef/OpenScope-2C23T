@@ -17,7 +17,6 @@ SCOPE_ATTENUATOR_CONFIG ?= 1
 
 CLANG ?= clang
 RUST_LLD := $(shell find $(HOME)/.rustup/toolchains -path '*/bin/rust-lld' | head -1)
-RUST_LIB_PATH := $(shell find $(HOME)/.rustup/toolchains -path '*/lib/clang/*/lib/baremetal' | head -1)
 LLD_DIR := $(BUILD)/lld
 
 CFLAGS := \
@@ -56,8 +55,7 @@ LDFLAGS := \
 	-Wl,-T,$(BUILD)/linker.ld \
 	-Wl,--gc-sections \
 	-Wl,-Map,$(BUILD)/$(PROJECT).map \
-	-L$(RUST_LIB_PATH) \
-	-lclang_rt.builtins-armv7em
+	-lc -lm
 
 SRCS := src/startup.c src/board.c src/display.c src/font.c src/dmm.c src/settings.c src/fpga.c src/scope.c src/siggen.c src/fw_update.c src/screenshot.c src/w25q.c src/usb_msc.c src/ui.c src/main.[...]
 ifeq ($(HW_TARGET_HW40),1)
