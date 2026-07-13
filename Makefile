@@ -54,7 +54,8 @@ LDFLAGS := \
 	-B$(LLD_DIR) \
 	-Wl,-T,$(BUILD)/linker.ld \
 	-Wl,--gc-sections \
-	-Wl,-Map,$(BUILD)/$(PROJECT).map
+	-Wl,-Map,$(BUILD)/$(PROJECT).map \
+	-lclang_rt.builtins-armv7em
 
 SRCS := src/startup.c src/board.c src/display.c src/font.c src/dmm.c src/settings.c src/fpga.c src/scope.c src/siggen.c src/fw_update.c src/screenshot.c src/w25q.c src/usb_msc.c src/ui.c src/main.c src/fft.c
 ifeq ($(HW_TARGET_HW40),1)
